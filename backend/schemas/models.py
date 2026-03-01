@@ -12,11 +12,24 @@ class UserProfile(BaseModel):
     
 class OTPSendRequest(BaseModel):
     phone_number: str
+    email: Optional[str] = None
     name: Optional[str] = None
 
 class OTPVerifyRequest(BaseModel):
     phone_number: str
+    email: Optional[str] = None
+    name: Optional[str] = None
     otp: str
+
+class LoginRequest(BaseModel):
+    identifier: str # Email or phone number
+    password: str
+
+class RegisterRequest(BaseModel):
+    name: str
+    phone_number: str
+    email: str
+    password: str
 
 class TokenResponse(BaseModel):
     access_token: str
