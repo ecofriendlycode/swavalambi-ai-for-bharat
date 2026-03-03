@@ -212,6 +212,7 @@ export default function Assistant() {
               id: `loaded-${idx}`,
               role: msg.role,
               content: msg.content,
+              imagePreviewUrl: msg.imagePreviewUrl,
             }));
             setMessages(loadedMessages);
             console.log(`[INFO] Loaded ${loadedMessages.length} messages from history`);

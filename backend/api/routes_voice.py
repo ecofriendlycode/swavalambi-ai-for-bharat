@@ -172,11 +172,84 @@ async def voice_chat(
         # Step 3: Get AI response
         if session_id not in _agent_sessions:
             _agent_sessions[session_id] = ProfilingAgent(session_id=session_id)
-        
+            
+            # Restore chat history if user_id is provided
+            if user_id:
+                try:
+                    from services.dynamodb_service import get_user
+                    user = get_user(user_id)
+                    if user and "chat_history" in user and user["chat_history"]:
+                        chat_history = user["chat_history"]
+                        restored_messages = []
+                        for msg in chat_history:
+                            restored_messages.append({
+                                "role": msg["role"],
+                                "content": [{"text": msg["content"]}]
+                            })
+                        _agent_sessions[session_id].agent.messages = restored_messages
+                        print(f"[INFO] Restored {len(chat_history)} messages from DynamoDB for voice chat {user_id}")
+                except Exception as e:
+                    print(f"[WARN] Failed to restore chat history for voice: {e}")
+                    
         agent = _agent_sessions[session_id]
         result = agent.run(english_text)
         response_text = result["response"]
         
+        # Save chat history to DynamoDB if user_id is provided
+        if user_id:
+            try:
+                from services.dynamodb_service import update_chat_history
+                if hasattr(agent.agent, "messages") and agent.agent.messages:
+                    raw_messages = agent.agent.messages
+                    serialized_chat = []
+                    
+                    for msg in raw_messages:
+                        role = None
+                        content_str = ""
+                        
+                        if isinstance(msg, dict):
+                            role = msg.get("role")
+                            content = msg.get("content")
+                        elif hasattr(msg, "role"):
+                            role = msg.role
+                            content = msg.content if hasattr(msg, "content") else None
+                        else:
+                            continue
+                            
+                        if not role:
+                            continue
+                            
+                        if content is None:
+                            content_str = ""
+                        elif isinstance(content, str):
+                            content_str = content
+                        elif isinstance(content, list):
+                            text_parts = []
+                            for block in content:
+                                if isinstance(block, str):
+                                    text_parts.append(block)
+                                elif isinstance(block, dict) and "text" in block:
+                                    text_parts.append(str(block["text"]))
+                                elif hasattr(block, "text"):
+                                    text_parts.append(str(block.text))
+                                elif hasattr(block, "__dict__") and "text" in block.__dict__:
+                                    text_parts.append(str(block.__dict__["text"]))
+                            content_str = " ".join(text_parts).strip()
+                        else:
+                            content_str = str(content)
+                            
+                        if content_str:
+                            serialized_chat.append({
+                                "role": role,
+                                "content": content_str
+                            })
+                            
+                    if serialized_chat:
+                        update_chat_history(user_id, serialized_chat)
+                        print(f"[INFO] Saved {len(serialized_chat)} messages to DynamoDB for voice chat {user_id}")
+            except Exception as e:
+                print(f"[WARN] Failed to persist voice chat history to DynamoDB: {e}")
+                
         print(f"[INFO] Agent response: {response_text[:50]}...")
         
         # Step 4: Translate response back to user's language

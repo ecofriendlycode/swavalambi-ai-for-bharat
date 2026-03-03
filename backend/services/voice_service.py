@@ -24,6 +24,7 @@ class VoiceProvider(Enum):
 class VoiceService:
     def __init__(self):
         self.provider = VoiceProvider(os.getenv("VOICE_PROVIDER", "aws"))
+        self.fallback_enabled = os.getenv("VOICE_FALLBACK_ENABLED", "true").lower() == "true"
         self._init_aws()
         self._init_sarvam()
     
@@ -74,6 +75,8 @@ class VoiceService:
                 return self._transcribe_sarvam(audio_bytes, language_code)
         except Exception as e:
             print(f"[ERROR] Transcription failed with {self.provider.value}: {e}")
+            if not self.fallback_enabled:
+                raise
             # Fallback to other provider
             if self.provider == VoiceProvider.AWS:
                 print("[INFO] Falling back to Sarvam AI")
@@ -152,34 +155,36 @@ class VoiceService:
         audio_bytes: bytes,
         language_code: str
     ) -> Dict[str, Any]:
-        """Transcribe using Sarvam AI Saaras"""
-        # Convert language code (hi-IN -> hi)
-        lang = language_code.split("-")[0]
-        
+        """Transcribe using Sarvam AI Saaras v3"""
         url = f"{self.sarvam_base_url}/speech-to-text"
         headers = {
-            "Authorization": f"Bearer {self.sarvam_api_key}",
+            "api-subscription-key": self.sarvam_api_key,
         }
-        
+
+        # NOTE: language_code is NOT a valid request field for Sarvam STT —
+        # it is auto-detected and returned in the response.
+        # Only 'file', 'model', and optional 'mode' are accepted.
         files = {
-            "audio": ("audio.wav", audio_bytes, "audio/wav")
+            "file": ("audio.wav", audio_bytes, "audio/wav")
         }
         data = {
-            "language_code": lang,
-            "model": os.getenv("SARVAM_STT_MODEL", "saaras:v1")
+            "model": os.getenv("SARVAM_STT_MODEL", "saaras:v3"),
+            "mode": "transcribe",  # transcribe | translate | verbatim | codemix
         }
-        
+
         response = requests.post(url, headers=headers, files=files, data=data)
         response.raise_for_status()
-        
+
         result = response.json()
-        
+        detected_lang = result.get("language_code", language_code)
+
         return {
             "text": result.get("transcript", ""),
-            "language": language_code,
+            "language": detected_lang,
             "confidence": result.get("confidence", 0.0),
             "provider": "sarvam"
         }
+
     
     def synthesize(
         self,
@@ -210,6 +215,8 @@ class VoiceService:
                 return self._synthesize_sarvam(text, language_code)
         except Exception as e:
             print(f"[ERROR] Synthesis failed with {self.provider.value}: {e}")
+            if not self.fallback_enabled:
+                raise
             # Fallback
             if self.provider == VoiceProvider.AWS:
                 print("[INFO] Falling back to Sarvam AI")
@@ -256,33 +263,36 @@ class VoiceService:
         text: str,
         language_code: str
     ) -> Dict[str, Any]:
-        """Synthesize using Sarvam AI Bulbul"""
-        lang = language_code.split("-")[0]
-        
+        """Synthesize using Sarvam AI Bulbul v3"""
         url = f"{self.sarvam_base_url}/text-to-speech"
         headers = {
-            "Authorization": f"Bearer {self.sarvam_api_key}",
+            "api-subscription-key": self.sarvam_api_key,
             "Content-Type": "application/json"
         }
-        
+
         data = {
             "text": text,
-            "language_code": lang,
-            "model": os.getenv("SARVAM_TTS_MODEL", "bulbul:v1"),
-            "speaker": "meera"  # Default female voice
+            "target_language_code": language_code,
+            "model": "bulbul:v3",  # Force v3 to match working app
+            "speaker": os.getenv("SARVAM_TTS_SPEAKER", "rohan"),
+            "speech_sample_rate": 24000,
         }
-        
+
         response = requests.post(url, headers=headers, json=data)
         response.raise_for_status()
-        
+
         result = response.json()
-        
+        # Sarvam TTS returns audio in an 'audios' array (base64 strings)
+        audios = result.get("audios", [])
+        audio_b64 = audios[0] if audios else result.get("audio", "")
+
         return {
-            "audio_base64": result.get("audio", ""),
+            "audio_base64": audio_b64,
             "audio_format": "wav",
             "duration": result.get("duration", 0.0),
             "provider": "sarvam"
         }
+
     
     def translate(
         self,
@@ -313,6 +323,8 @@ class VoiceService:
                 return self._translate_sarvam(text, source_lang, target_lang)
         except Exception as e:
             print(f"[ERROR] Translation failed with {self.provider.value}: {e}")
+            if not self.fallback_enabled:
+                raise
             # Fallback
             if self.provider == VoiceProvider.AWS:
                 return self._translate_sarvam(text, source_lang, target_lang)
@@ -347,16 +359,29 @@ class VoiceService:
     ) -> Dict[str, Any]:
         """Translate using Sarvam AI Mayura"""
         url = f"{self.sarvam_base_url}/translate"
+        # Sarvam uses api-subscription-key header, NOT Authorization: Bearer
         headers = {
-            "Authorization": f"Bearer {self.sarvam_api_key}",
+            "api-subscription-key": self.sarvam_api_key,
             "Content-Type": "application/json"
         }
         
+        # Normalize language codes to full BCP-47 format (e.g. hi -> hi-IN)
+        _lang_map = {
+            "hi": "hi-IN", "ta": "ta-IN", "te": "te-IN",
+            "mr": "mr-IN", "kn": "kn-IN", "ml": "ml-IN",
+            "bn": "bn-IN", "gu": "gu-IN", "or": "or-IN",
+            "pa": "pa-IN", "en": "en-IN",
+        }
+        source_code = _lang_map.get(source_lang, source_lang)
+        target_code = _lang_map.get(target_lang, target_lang)
+        
         data = {
-            "text": text,
-            "source_language_code": source_lang,
-            "target_language_code": target_lang,
-            "model": os.getenv("SARVAM_TRANSLATE_MODEL", "mayura:v1")
+            "input": text,
+            "source_language_code": source_code,
+            "target_language_code": target_code,
+            "model": os.getenv("SARVAM_TRANSLATE_MODEL", "mayura:v1"),
+            "mode": "formal",
+            "enable_preprocessing": False,
         }
         
         response = requests.post(url, headers=headers, json=data)
