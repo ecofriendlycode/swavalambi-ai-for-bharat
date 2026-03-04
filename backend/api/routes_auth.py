@@ -13,9 +13,144 @@ from services.cognito_service import (
 
 router = APIRouter()
 
-# Keep OTP endpoints for backward compatibility (can be removed later)
-_otp_store: dict = {}
+# OTP storage (in-memory for now, use Redis/DynamoDB for production)
+_otp_store: dict = {}  # {email: otp_code}
+_otp_timestamp: dict = {}  # {email: timestamp}
 _name_store: dict = {}
+
+# Legacy phone OTP endpoints (deprecated)
+@router.post("/send-otp", summary="Send an OTP to the user's phone (DEPRECATED)")
+async def send_otp_phone(request: OTPSendRequest):
+    """Legacy phone OTP endpoint - deprecated"""
+    mock_otp = "123456"
+    _otp_store[request.phone_number] = mock_otp
+    if request.name:
+        _name_store[request.phone_number] = request.name
+    if request.email:
+        _name_store[f"{request.phone_number}_email"] = request.email
+    print(f"[MOCK] Sending OTP {mock_otp} to {request.phone_number}")
+    return {"message": "OTP sent successfully."}
+
+@router.post("/verify-otp", response_model=TokenResponse, summary="Verify phone OTP (DEPRECATED)")
+async def verify_otp_phone(request: OTPVerifyRequest):
+    """Legacy phone OTP endpoint - deprecated"""
+    stored_otp = _otp_store.get(request.phone_number)
+
+    if not stored_otp or stored_otp != request.otp:
+        raise HTTPException(status_code=401, detail="Invalid or expired OTP.")
+
+    del _otp_store[request.phone_number]
+
+    resolved_name = None
+    try:
+        existing = get_user(request.phone_number)
+        if existing and existing.get("name"):
+            resolved_name = existing["name"]
+    except Exception as e:
+        print(f"[WARN] DynamoDB lookup failed (non-fatal): {e}")
+
+    if not resolved_name:
+        resolved_name = request.name or _name_store.pop(request.phone_number, None) or request.phone_number
+
+    name = resolved_name
+
+    try:
+        create_or_update_user(user_id=request.phone_number, name=name)
+    except Exception as e:
+        print(f"[WARN] DynamoDB upsert failed (non-fatal): {e}")
+
+    mock_token = f"mock_jwt_for_{request.phone_number}"
+    return TokenResponse(
+        access_token=mock_token,
+        user_id=request.phone_number,
+        name=name,
+    )
+
+
+# --- Email OTP Login (Passwordless) ---
+
+@router.post("/send-email-otp", summary="Send OTP to email for passwordless login")
+async def send_email_otp(email: str):
+    """
+    Send OTP to user's email for passwordless login.
+    User must be registered first.
+    """
+    import random
+    from datetime import datetime
+    
+    # Check if user exists in DynamoDB
+    try:
+        user = get_user(email)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found. Please register first.")
+    except Exception as e:
+        print(f"[ERROR] User lookup failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send OTP. Please try again.")
+    
+    # Generate 6-digit OTP
+    otp = str(random.randint(100000, 999999))
+    
+    # Store OTP (expires in 5 minutes)
+    _otp_store[email] = otp
+    _otp_timestamp[email] = datetime.now()
+    
+    # TODO: Send actual email via SES
+    # For now, just log it (for development/testing)
+    print(f"[EMAIL OTP] Sending OTP {otp} to {email}")
+    
+    return {
+        "message": "OTP sent to your email successfully.",
+        "email": email,
+        "debug_otp": otp  # Remove this in production!
+    }
+
+
+@router.post("/verify-email-otp", response_model=TokenResponse, summary="Verify email OTP and login")
+async def verify_email_otp(email: str, otp: str):
+    """
+    Verify email OTP and login user (passwordless).
+    """
+    from datetime import datetime, timedelta
+    
+    # Check if OTP exists
+    stored_otp = _otp_store.get(email)
+    if not stored_otp:
+        raise HTTPException(status_code=401, detail="No OTP found. Please request a new one.")
+    
+    # Check if OTP expired (5 minutes)
+    otp_time = _otp_timestamp.get(email)
+    if otp_time and datetime.now() - otp_time > timedelta(minutes=5):
+        del _otp_store[email]
+        del _otp_timestamp[email]
+        raise HTTPException(status_code=401, detail="OTP expired. Please request a new one.")
+    
+    # Verify OTP
+    if stored_otp != otp:
+        raise HTTPException(status_code=401, detail="Invalid OTP.")
+    
+    # Clear OTP
+    del _otp_store[email]
+    if email in _otp_timestamp:
+        del _otp_timestamp[email]
+    
+    # Get user info
+    try:
+        user = get_user(email)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found.")
+        
+        # Generate mock token (in production, use proper JWT)
+        mock_token = f"email_otp_jwt_for_{email}"
+        
+        return TokenResponse(
+            access_token=mock_token,
+            token_type="bearer",
+            user_id=email,
+            name=user.get('name', 'User')
+        )
+    except Exception as e:
+        print(f"[ERROR] Login failed: {e}")
+        raise HTTPException(status_code=500, detail="Login failed. Please try again.")
 
 @router.post("/send-otp", summary="Send an OTP to the user's phone (DEPRECATED - use email registration)")
 async def send_otp(request: OTPSendRequest):
