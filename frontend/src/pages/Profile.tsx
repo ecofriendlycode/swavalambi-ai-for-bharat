@@ -45,25 +45,33 @@ export default function Profile() {
     // Get user ID
     const userId = localStorage.getItem("swavalambi_user_id");
     
-    // Clear chat history from DynamoDB if user is logged in
+    // Reset assessment data in DynamoDB if user is logged in
     if (userId) {
       try {
-        await fetch(`${API_BASE}/users/${userId}/chat-history`, {
-          method: 'DELETE'
+        const response = await fetch(`${API_BASE}/users/${userId}/reset-assessment`, {
+          method: 'POST'
         });
-        console.log("[INFO] Cleared chat history from DynamoDB");
+        
+        if (response.ok) {
+          console.log("[INFO] Reset assessment data in DynamoDB");
+        } else {
+          console.error("[ERROR] Failed to reset assessment:", await response.text());
+        }
       } catch (error) {
-        console.error("[ERROR] Failed to clear chat history:", error);
+        console.error("[ERROR] Failed to reset assessment:", error);
       }
     }
     
-    // Clear session and profile data for fresh assessment
+    // Clear all local storage assessment data
     sessionStorage.removeItem("swavalambi_session_id");
     localStorage.removeItem("swavalambi_skill_rating");
     localStorage.removeItem("swavalambi_intent");
     localStorage.removeItem("swavalambi_skill");
+    localStorage.removeItem("swavalambi_theory_score");
+    
     // Add flag to indicate this is a reassessment
     sessionStorage.setItem("is_reassessment", "true");
+    
     // Force full page reload to ensure clean state
     window.location.href = "/assistant?reassess=true";
   };
