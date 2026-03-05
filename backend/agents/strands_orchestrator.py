@@ -1,6 +1,6 @@
 """
-strands_orchestrator.py — Simplified direct orchestrator
-Directly calls search tools without LLM overhead
+strands_orchestrator.py — Intent-based orchestrator
+Calls only the relevant tool based on user intent
 """
 import os
 import logging
@@ -25,8 +25,12 @@ _embedding_provider = BedrockTitanEmbeddingProvider(
 
 def orchestrate(user_profile: Dict[str, Any] = None, task: str = None, context: Dict[str, Any] = None, max_iterations: int = 10) -> Dict[str, Any]:
     """
-    Simplified orchestration - directly calls search tools and formats results.
-    No LLM needed since we always call all 3 tools based on user profile.
+    Intent-based orchestration - calls only the relevant tool based on user intent.
+    
+    Supported intents:
+    - 'job' -> search_jobs_tool
+    - 'upskill' -> search_upskill_tool
+    - 'loan' -> search_schemes_tool
     
     Args:
         user_profile: User profile dict (for recommendations)
@@ -35,10 +39,10 @@ def orchestrate(user_profile: Dict[str, Any] = None, task: str = None, context: 
         max_iterations: Maximum agentic loop iterations (unused in direct mode)
     
     Returns:
-        Dictionary with results from all invoked agents
+        Dictionary with results from the invoked agent
     """
     print(f"\n{'='*60}")
-    print("DIRECT ORCHESTRATION STARTED")
+    print("INTENT-BASED ORCHESTRATION STARTED")
     print(f"{'='*60}")
     
     if not user_profile:
@@ -46,7 +50,7 @@ def orchestrate(user_profile: Dict[str, Any] = None, task: str = None, context: 
     
     # Extract profile fields
     skill = user_profile.get('profession_skill', user_profile.get('skill', ''))
-    intent = user_profile.get('intent', 'job')
+    intent = user_profile.get('intent', 'job').lower()
     skill_level = user_profile.get('skill_rating', user_profile.get('skill_level', 3))
     state = user_profile.get('preferred_location', user_profile.get('state', 'All India'))
     
@@ -56,26 +60,45 @@ def orchestrate(user_profile: Dict[str, Any] = None, task: str = None, context: 
     print(f"  Level: {skill_level}/5")
     print(f"  Location: {state}")
     
-    # Generate embedding once for all agents (optimization)
+    # Generate embedding once (optimization)
     print(f"\n🔄 Generating embedding...")
     query_text = f"{skill} {intent} {state}"
     query_embedding = _embedding_provider.generate_embedding(query_text)
     print(f"✅ Embedding generated (1024 dimensions)")
     
-    # Call all 3 search tools directly with pre-generated embedding
-    print(f"\n🔍 Calling search tools...")
+    # Initialize empty results
+    jobs = []
+    schemes = []
+    training_centers = []
     
-    jobs = search_jobs_tool(skill, skill_level, state, query_embedding=query_embedding)[:5]
-    schemes = search_schemes_tool(skill, intent, skill_level, state, query_embedding=query_embedding)[:5]
-    training_centers = search_upskill_tool(skill, skill_level, state, query_embedding=query_embedding)[:5]
+    # Call only the relevant tool based on intent
+    print(f"\n🔍 Calling tool based on intent: '{intent}'")
+    
+    if intent == 'job':
+        print(f"  → Searching jobs...")
+        jobs = search_jobs_tool(skill, skill_level, state, query_embedding=query_embedding)[:5]
+        message = f"Found {len(jobs)} job opportunities for {skill} professionals in {state}."
+        
+    elif intent == 'upskill':
+        print(f"  → Searching training centers...")
+        training_centers = search_upskill_tool(skill, skill_level, state, query_embedding=query_embedding)[:5]
+        message = f"Found {len(training_centers)} training programs for {skill} in {state}."
+        
+    elif intent == 'loan':
+        print(f"  → Searching schemes...")
+        schemes = search_schemes_tool(skill, intent, skill_level, state, query_embedding=query_embedding)[:5]
+        message = f"Found {len(schemes)} government schemes for {skill} professionals in {state}."
+        
+    else:
+        # Default to job search if intent is not recognized
+        print(f"  ⚠️  Unknown intent '{intent}', defaulting to job search...")
+        jobs = search_jobs_tool(skill, skill_level, state, query_embedding=query_embedding)[:5]
+        message = f"Found {len(jobs)} job opportunities for {skill} professionals in {state}."
     
     print(f"\n✅ Results:")
     print(f"  Jobs: {len(jobs)}")
     print(f"  Schemes: {len(schemes)}")
     print(f"  Training Centers: {len(training_centers)}")
-    
-    # Generate simple encouraging message
-    message = f"Found {len(jobs)} job opportunities, {len(schemes)} government schemes, and {len(training_centers)} training programs for {skill} professionals in {state}. Explore these opportunities to advance your career!"
     
     all_results = {
         "profile": None,
@@ -88,7 +111,7 @@ def orchestrate(user_profile: Dict[str, Any] = None, task: str = None, context: 
     }
     
     print(f"\n{'='*60}")
-    print("DIRECT ORCHESTRATION COMPLETE")
+    print("INTENT-BASED ORCHESTRATION COMPLETE")
     print(f"{'='*60}")
     
     return all_results
