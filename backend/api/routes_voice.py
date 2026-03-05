@@ -134,13 +134,14 @@ async def voice_chat(
 ):
     """
     Complete voice chat flow:
-    1. Transcribe user's audio
-    2. Translate to English (if needed)
-    3. Send to AI agent
-    4. Translate response back to user's language
-    5. Synthesize response to speech
+    1. Transcribe user's audio to text
+    2. Send transcribed text directly to AI agent (LLM handles multilingual conversation)
+    3. Get response from AI agent in user's language
+    4. Synthesize response to speech
     
     Returns both text and audio response
+    
+    Note: Translation layer removed - Claude LLM handles multilingual conversation natively
     """
     try:
         # Step 1: Transcribe audio
@@ -157,26 +158,37 @@ async def voice_chat(
         )
         
         user_text = transcription["text"]
-        logger.info("User said: %s", user_text)
-        
-        # Step 2: Translate to English if needed
-        enable_translation = os.getenv("VOICE_ENABLE_TRANSLATION", "true").lower() == "true"
-        if enable_translation and not language.startswith("en"):
-            translation = voice_service.translate(
-                text=user_text,
-                source_lang=language.split("-")[0],
-                target_lang="en"
-            )
-            english_text = translation["translated_text"]
-            logger.info("Translated to English: %s", english_text)
-        else:
-            english_text = user_text
+        logger.info("User said (%s): %s", language, user_text)
         
         # Step 3: Get AI response
-        if session_id not in _agent_sessions:
-            _agent_sessions[session_id] = ProfilingAgent(session_id=session_id)
+        is_new_session = session_id not in _agent_sessions
+        
+        if is_new_session:
+            # Get user's preferred language and name
+            preferred_language = language  # Use voice language as default
+            user_name = ""
+            
+            if user_id:
+                try:
+                    from services.dynamodb_service import get_user
+                    user_data = get_user(user_id)
+                    if user_data:
+                        if "preferred_language" in user_data:
+                            preferred_language = user_data["preferred_language"]
+                        if "name" in user_data:
+                            user_name = user_data["name"]
+                except Exception as e:
+                    logger.warning("Failed to get user preferences: %s", e)
+            
+            # Create agent with preferred language
+            _agent_sessions[session_id] = ProfilingAgent(
+                session_id=session_id,
+                user_name=user_name,
+                preferred_language=preferred_language
+            )
             
             # Restore chat history if user_id is provided
+            chat_restored = False
             if user_id:
                 try:
                     from services.dynamodb_service import get_user
@@ -191,12 +203,81 @@ async def voice_chat(
                             })
                         _agent_sessions[session_id].agent.messages = restored_messages
                         logger.info("Restored %d messages from DynamoDB for voice chat %s", len(chat_history), user_id)
+                        chat_restored = True
                 except Exception as e:
                     logger.warning("Failed to restore chat history for voice: %s", e)
+            
+            # If this is a new session and no chat was restored, initialize with greeting
+            if not chat_restored and user_id:
+                try:
+                    from services.dynamodb_service import update_chat_history
+                    
+                    # Multilingual greetings
+                    greetings = {
+                        "hi-IN": {
+                            "with_name": f"नमस्ते, {user_name}! 😊 मैं आपका स्वावलंबी सहायक हूं। आइए आपकी प्रोफाइल बनाएं। आप किस तरह का काम करते हैं? (जैसे, **दर्जी**, **बढ़ई**, **प्लंबर**, **वेल्डर**, **ब्यूटीशियन**)",
+                            "without_name": "नमस्ते! मैं आपका स्वावलंबी सहायक हूं। आइए आपकी प्रोफाइल बनाएं। बताइए, आप किस तरह का काम करते हैं? (जैसे, **दर्जी**, **बढ़ई**, **प्लंबर**, **वेल्डर**, **ब्यूटीशियन**)"
+                        },
+                        "te-IN": {
+                            "with_name": f"నమస్తే, {user_name}! 😊 నేను మీ స్వావలంబి సహాయకుడిని. మీ ప్రొఫైల్ రూపొందించుకుందాం. మీరు ఏ రకమైన పని చేస్తారు? (ఉదా., **టైలర్**, **కార్పెంటర్**, **ప్లంబర్**, **వెల్డర్**, **బ్యూటీషియన్**)",
+                            "without_name": "నమస్తే! నేను మీ స్వావలంబి సహాయకుడిని. మీ ప్రొఫైల్ రూపొందించుకుందాం. చెప్పండి, మీరు ఏ రకమైన పని చేస్తారు? (ఉదా., **టైలర్**, **కార్పెంటర్**, **ప్లంబర్**, **వెల్డర్**, **బ్యూటీషియన్**)"
+                        },
+                        "ta-IN": {
+                            "with_name": f"வணக்கம், {user_name}! 😊 நான் உங்கள் ஸ்வாவலம்பி உதவியாளர். உங்கள் சுயவிவரத்தை உருவாக்குவோம். நீங்கள் என்ன வேலை செய்கிறீர்கள்? (எ.கா., **தையல்காரர்**, **தச்சர்**, **பிளம்பர்**, **வெல்டர்**, **அழகுக் கலைஞர்**)",
+                            "without_name": "வணக்கம்! நான் உங்கள் ஸ்வாவலம்பி உதவியாளர். உங்கள் சுயவிவரத்தை உருவாக்குவோம். சொல்லுங்கள், நீங்கள் என்ன வேலை செய்கிறீர்கள்? (எ.கா., **தையல்காரர்**, **தச்சர்**, **பிளம்பர்**, **வெல்டர்**, **அழகுக் கலைஞர்**)"
+                        },
+                        "mr-IN": {
+                            "with_name": f"नमस्कार, {user_name}! 😊 मी तुमचा स्वावलंबी सहाय्यक आहे. चला तुमचे प्रोफाइल तयार करूया. तुम्ही कोणत्या प्रकारचे काम करता? (उदा., **शिंपी**, **सुतार**, **प्लंबर**, **वेल्डर**, **ब्युटिशियन**)",
+                            "without_name": "नमस्कार! मी तुमचा स्वावलंबी सहाय्यक आहे. चला तुमचे प्रोफाइल तयार करूया. सांगा, तुम्ही कोणत्या प्रकारचे काम करता? (उदा., **शिंपी**, **सुतार**, **प्लंबर**, **वेल्डर**, **ब्युटिशियन**)"
+                        },
+                        "kn-IN": {
+                            "with_name": f"ನಮಸ್ಕಾರ, {user_name}! 😊 ನಾನು ನಿಮ್ಮ ಸ್ವಾವಲಂಬಿ ಸಹಾಯಕ. ನಿಮ್ಮ ಪ್ರೊಫೈಲ್ ರಚಿಸೋಣ. ನೀವು ಯಾವ ರೀತಿಯ ಕೆಲಸ ಮಾಡುತ್ತೀರಿ? (ಉದಾ., **ಟೈಲರ್**, **ಬಡಗಿ**, **ಪ್ಲಂಬರ್**, **ವೆಲ್ಡರ್**, **ಬ್ಯೂಟಿಶಿಯನ್**)",
+                            "without_name": "ನಮಸ್ಕಾರ! ನಾನು ನಿಮ್ಮ ಸ್ವಾವಲಂಬಿ ಸಹಾಯಕ. ನಿಮ್ಮ ಪ್ರೊಫೈಲ್ ರಚಿಸೋಣ. ಹೇಳಿ, ನೀವು ಯಾವ ರೀತಿಯ ಕೆಲಸ ಮಾಡುತ್ತೀರಿ? (ಉದಾ., **ಟೈಲರ್**, **ಬಡಗಿ**, **ಪ್ಲಂಬರ್**, **ವೆಲ್ಡರ್**, **ಬ್ಯೂಟಿಶಿಯನ್**)"
+                        },
+                        "bn-IN": {
+                            "with_name": f"নমস্কার, {user_name}! 😊 আমি আপনার স্বাবলম্বী সহায়ক। আসুন আপনার প্রোফাইল তৈরি করি। আপনি কী ধরনের কাজ করেন? (যেমন, **দর্জি**, **ছুতোর**, **প্লাম্বার**, **ওয়েল্ডার**, **বিউটিশিয়ান**)",
+                            "without_name": "নমস্কার! আমি আপনার স্বাবলম্বী সহায়ক। আসুন আপনার প্রোফাইল তৈরি করি। বলুন, আপনি কী ধরনের কাজ করেন? (যেমন, **দর্জি**, **ছুতোর**, **প্লাম্বার**, **ওয়েল্ডার**, **বিউটিশিয়ান**)"
+                        },
+                        "gu-IN": {
+                            "with_name": f"નમસ્તે, {user_name}! 😊 હું તમારો સ્વાવલંબી સહાયક છું. ચાલો તમારી પ્રોફાઇલ બનાવીએ. તમે કેવા પ્રકારનું કામ કરો છો? (દા.ત., **દરજી**, **સુથાર**, **પ્લમ્બર**, **વેલ્ડર**, **બ્યુટિશિયન**)",
+                            "without_name": "નમસ્તે! હું તમારો સ્વાવલંબી સહાયક છું. ચાલો તમારી પ્રોફાઇલ બનાવીએ. કહો, તમે કેવા પ્રકારનું કામ કરો છો? (દા.ત., **દરજી**, **સુથાર**, **પ્લમ્બર**, **વેલ્ડર**, **બ્યુટિશિયન**)"
+                        },
+                        "ml-IN": {
+                            "with_name": f"നമസ്കാരം, {user_name}! 😊 ഞാൻ നിങ്ങളുടെ സ്വാവലംബി സഹായകനാണ്. നിങ്ങളുടെ പ്രൊഫൈൽ സൃഷ്ടിക്കാം. നിങ്ങൾ ഏത് തരത്തിലുള്ള ജോലി ചെയ്യുന്നു? (ഉദാ., **ടെയിലർ**, **ആശാരി**, **പ്ലംബർ**, **വെൽഡർ**, **ബ്യൂട്ടീഷ്യൻ**)",
+                            "without_name": "നമസ്കാരം! ഞാൻ നിങ്ങളുടെ സ്വാവലംബി സഹായകനാണ്. നിങ്ങളുടെ പ്രൊഫൈൽ സൃഷ്ടിക്കാം. പറയൂ, നിങ്ങൾ ഏത് തരത്തിലുള്ള ജോലി ചെയ്യുന്നു? (ഉദാ., **ടെയിലർ**, **ആശാരി**, **പ്ലംബർ**, **വെൽഡർ**, **ബ്യൂട്ടീഷ്യൻ**)"
+                        },
+                        "pa-IN": {
+                            "with_name": f"ਸਤ ਸ੍ਰੀ ਅਕਾਲ, {user_name}! 😊 ਮੈਂ ਤੁਹਾਡਾ ਸਵਾਵਲੰਬੀ ਸਹਾਇਕ ਹਾਂ। ਆਓ ਤੁਹਾਡੀ ਪ੍ਰੋਫਾਈਲ ਬਣਾਈਏ। ਤੁਸੀਂ ਕਿਸ ਤਰ੍ਹਾਂ ਦਾ ਕੰਮ ਕਰਦੇ ਹੋ? (ਜਿਵੇਂ, **ਦਰਜ਼ੀ**, **ਤਰਖਾਣ**, **ਪਲੰਬਰ**, **ਵੈਲਡਰ**, **ਬਿਊਟੀਸ਼ੀਅਨ**)",
+                            "without_name": "ਸਤ ਸ੍ਰੀ ਅਕਾਲ! ਮੈਂ ਤੁਹਾਡਾ ਸਵਾਵਲੰਬੀ ਸਹਾਇਕ ਹਾਂ। ਆਓ ਤੁਹਾਡੀ ਪ੍ਰੋਫਾਈਲ ਬਣਾਈਏ। ਦੱਸੋ, ਤੁਸੀਂ ਕਿਸ ਤਰ੍ਹਾਂ ਦਾ ਕੰਮ ਕਰਦੇ ਹੋ? (ਜਿਵੇਂ, **ਦਰਜ਼ੀ**, **ਤਰਖਾਣ**, **ਪਲੰਬਰ**, **ਵੈਲਡਰ**, **ਬਿਊਟੀਸ਼ੀਅਨ**)"
+                        },
+                        "en-IN": {
+                            "with_name": f"Namaste, {user_name}! 😊 I'm your Swavalambi Assistant. Let's build your profile. What kind of work do you do? (e.g., **Tailor**, **Carpenter**, **Plumber**, **Welder**, **Beautician**)",
+                            "without_name": "Namaste! I am your Swavalambi assistant. Let's build your profile. Tell me, what kind of work do you do? (e.g., **Tailor**, **Carpenter**, **Plumber**, **Welder**, **Beautician**)"
+                        }
+                    }
+                    
+                    # Get greeting in user's language
+                    lang_greetings = greetings.get(preferred_language, greetings["en-IN"])
+                    
+                    # Check if user_name is valid (not empty, not a phone number)
+                    if user_name and not user_name.isdigit() and len(user_name.strip()) > 1 and not user_name.startswith('+'):
+                        greeting = lang_greetings["with_name"]
+                    else:
+                        greeting = lang_greetings["without_name"]
+                    
+                    # Initialize chat history with greeting
+                    initial_chat = [{"role": "assistant", "content": greeting}]
+                    update_chat_history(user_id, initial_chat)
+                    logger.info("Initialized voice chat history with %s greeting for user %s", preferred_language, user_id)
+                except Exception as e:
+                    logger.warning("Failed to initialize voice chat greeting: %s", e)
                     
         agent = _agent_sessions[session_id]
-        result = agent.run(english_text)
+        # Send user's original language text directly to LLM (no translation needed)
+        result = agent.run(user_text)
+        # LLM responds in user's language (based on system prompt and input language)
         response_text = result["response"]
+        logger.info("Agent response (%s): %s...", language, response_text[:100])
         
         # Save chat history to DynamoDB if user_id is provided
         if user_id:
@@ -261,32 +342,16 @@ async def voice_chat(
                 logger.info("Saved profile assessment for voice chat user %s", user_id)
             except Exception as e:
                 logger.warning("Failed to save profile assessment: %s", e)
-                
-        logger.info("Agent response: %s...", response_text[:50])
         
-        # Step 4: Translate response back to user's language
-        if enable_translation and not language.startswith("en"):
-            translation = voice_service.translate(
-                text=response_text,
-                source_lang="en",
-                target_lang=language.split("-")[0]
-            )
-            localized_response = translation["translated_text"]
-            logger.info("Translated response: %s...", localized_response[:50])
-        else:
-            localized_response = response_text
-        
-        # Step 5: Synthesize response to speech
+        # Step 4: Synthesize response to speech (response is already in user's language)
         synthesis = voice_service.synthesize(
-            text=localized_response,
+            text=response_text,
             language_code=language
         )
         
         return {
             "transcribed_text": user_text,
-            "english_text": english_text,
             "response_text": response_text,
-            "localized_response": localized_response,
             "audio_base64": synthesis["audio_base64"],
             "audio_format": synthesis["audio_format"],
             "provider": transcription["provider"],

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import {
   ArrowLeft,
   History,
@@ -12,11 +12,20 @@ import {
   Play,
   Square,
   Loader2,
+  Languages,
+  Globe,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import BottomNav from "../components/BottomNav";
 
 // ── Markdown renderer ─────────────────────────────────────────────────────────
 function renderMarkdown(text: string): React.ReactNode[] {
+  // Safety check: handle undefined or null text
+  if (!text || typeof text !== 'string') {
+    return [];
+  }
+  
   const lines = text.split("\n");
   const nodes: React.ReactNode[] = [];
 
@@ -213,6 +222,7 @@ const PlaybackButton: React.FC<PlaybackButtonProps> = ({
 
 export default function Assistant() {
   const navigate = useNavigate();
+  const location = useLocation();
   const sessionId = getSessionId();
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
@@ -223,6 +233,7 @@ export default function Assistant() {
   const [selectedLanguage, setSelectedLanguage] = useState("hi-IN");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const hasPlayedGreetingRef = useRef(false); // Use ref instead of state for immediate persistence
 
   // Playback state for voice playback controls
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
@@ -238,16 +249,243 @@ export default function Assistant() {
   // Clear chat confirmation modal state
   const [showClearChatModal, setShowClearChatModal] = useState(false);
 
-  // Load chat history on mount
+  // Language selection modal state
+  const [showLanguageModal, setShowLanguageModal] = useState(false);
+  const [showLanguageSelector, setShowLanguageSelector] = useState(false);
+
+  // Voice auto-play toggle state (default: enabled for better voice UX)
+  const [voiceAutoPlay, setVoiceAutoPlay] = useState(true);
+
+  // Supported languages
+  const languages = [
+    { code: "hi-IN", name: "हिंदी", nativeName: "Hindi", flag: "🇮🇳" },
+    { code: "te-IN", name: "తెలుగు", nativeName: "Telugu", flag: "🇮🇳" },
+    { code: "ta-IN", name: "தமிழ்", nativeName: "Tamil", flag: "🇮🇳" },
+    { code: "mr-IN", name: "मराठी", nativeName: "Marathi", flag: "🇮🇳" },
+    { code: "kn-IN", name: "ಕನ್ನಡ", nativeName: "Kannada", flag: "🇮🇳" },
+    { code: "bn-IN", name: "বাংলা", nativeName: "Bengali", flag: "🇮🇳" },
+    { code: "gu-IN", name: "ગુજરાતી", nativeName: "Gujarati", flag: "🇮🇳" },
+    { code: "ml-IN", name: "മലയാളം", nativeName: "Malayalam", flag: "🇮🇳" },
+    { code: "pa-IN", name: "ਪੰਜਾਬੀ", nativeName: "Punjabi", flag: "🇮🇳" },
+    { code: "en-IN", name: "English", nativeName: "English", flag: "🇬🇧" },
+  ];
+
+  // Multilingual greetings
+  const getGreeting = (langCode: string, userName: string) => {
+    const greetings: Record<string, { withName: string; withoutName: string }> = {
+      "hi-IN": {
+        withName: `नमस्ते, ${userName}! 😊 मैं आपका स्वावलंबी सहायक हूं। आइए आपकी प्रोफाइल बनाएं। आप किस तरह का काम करते हैं? (जैसे, **दर्जी**, **बढ़ई**, **प्लंबर**, **वेल्डर**, **ब्यूटीशियन**)`,
+        withoutName: `नमस्ते! मैं आपका स्वावलंबी सहायक हूं। आइए आपकी प्रोफाइल बनाएं। बताइए, आप किस तरह का काम करते हैं? (जैसे, **दर्जी**, **बढ़ई**, **प्लंबर**, **वेल्डर**, **ब्यूटीशियन**)`
+      },
+      "te-IN": {
+        withName: `నమస్తే, ${userName}! 😊 నేను మీ స్వావలంబి సహాయకుడిని। మీ ప్రొఫైల్ రూపొందించుకుందాం. మీరు ఏ రకమైన పని చేస్తారు? (ఉదా., **టైలర్**, **కార్పెంటర్**, **ప్లంబర్**, **వెల్డర్**, **బ్యూటీషియన్**)`,
+        withoutName: `నమస్తే! నేను మీ స్వావలంబి సహాయకుడిని. మీ ప్రొఫైల్ రూపొందించుకుందాం. చెప్పండి, మీరు ఏ రకమైన పని చేస్తారు? (ఉదా., **టైలర్**, **కార్పెంటర్**, **ప్లంబర్**, **వెల్డర్**, **బ్యూటీషియన్**)`
+      },
+      "ta-IN": {
+        withName: `வணக்கம், ${userName}! 😊 நான் உங்கள் ஸ்வாவலம்பி உதவியாளர். உங்கள் சுயவிவரத்தை உருவாக்குவோம். நீங்கள் என்ன வேலை செய்கிறீர்கள்? (எ.கா., **தையல்காரர்**, **தச்சர்**, **பிளம்பர்**, **வெல்டர்**, **அழகுக் கலைஞர்**)`,
+        withoutName: `வணக்கம்! நான் உங்கள் ஸ்வாவலம்பி உதவியாளர். உங்கள் சுயவிவரத்தை உருவாக்குவோம். சொல்லுங்கள், நீங்கள் என்ன வேலை செய்கிறீர்கள்? (எ.கா., **தையல்காரர்**, **தச்சர்**, **பிளம்பர்**, **வெல்டர்**, **அழகுக் கலைஞர்**)`
+      },
+      "mr-IN": {
+        withName: `नमस्कार, ${userName}! 😊 मी तुमचा स्वावलंबी सहाय्यक आहे. चला तुमचे प्रोफाइल तयार करूया. तुम्ही कोणत्या प्रकारचे काम करता? (उदा., **शिंपी**, **सुतार**, **प्लंबर**, **वेल्डर**, **ब्युटिशियन**)`,
+        withoutName: `नमस्कार! मी तुमचा स्वावलंबी सहाय्यक आहे. चला तुमचे प्रोफाइल तयार करूया. सांगा, तुम्ही कोणत्या प्रकारचे काम करता? (उदा., **शिंपी**, **सुतार**, **प्लंबर**, **वेल्डर**, **ब्युटिशियन**)`
+      },
+      "kn-IN": {
+        withName: `ನಮಸ್ಕಾರ, ${userName}! 😊 ನಾನು ನಿಮ್ಮ ಸ್ವಾವಲಂಬಿ ಸಹಾಯಕ. ನಿಮ್ಮ ಪ್ರೊಫೈಲ್ ರಚಿಸೋಣ. ನೀವು ಯಾವ ರೀತಿಯ ಕೆಲಸ ಮಾಡುತ್ತೀರಿ? (ಉದಾ., **ಟೈಲರ್**, **ಬಡಗಿ**, **ಪ್ಲಂಬರ್**, **ವೆಲ್ಡರ್**, **ಬ್ಯೂಟಿಶಿಯನ್**)`,
+        withoutName: `ನಮಸ್ಕಾರ! ನಾನು ನಿಮ್ಮ ಸ್ವಾವಲಂಬಿ ಸಹಾಯಕ. ನಿಮ್ಮ ಪ್ರೊಫೈಲ್ ರಚಿಸೋಣ. ಹೇಳಿ, ನೀವು ಯಾವ ರೀತಿಯ ಕೆಲಸ ಮಾಡುತ್ತೀರಿ? (ಉದಾ., **ಟೈಲರ್**, **ಬಡಗಿ**, **ಪ್ಲಂಬರ್**, **ವೆಲ್ಡರ್**, **ಬ್ಯೂಟಿಶಿಯನ್**)`
+      },
+      "bn-IN": {
+        withName: `নমস্কার, ${userName}! 😊 আমি আপনার স্বাবলম্বী সহায়ক। আসুন আপনার প্রোফাইল তৈরি করি। আপনি কী ধরনের কাজ করেন? (যেমন, **দর্জি**, **ছুতোর**, **প্লাম্বার**, **ওয়েল্ডার**, **বিউটিশিয়ান**)`,
+        withoutName: `নমস্কার! আমি আপনার স্বাবলম্বী সহায়ক। আসুন আপনার প্রোফাইল তৈরি করি। বলুন, আপনি কী ধরনের কাজ করেন? (যেমন, **দর্জি**, **ছুতোর**, **প্লাম্বার**, **ওয়েল্ডার**, **বিউটিশিয়ান**)`
+      },
+      "gu-IN": {
+        withName: `નમસ્તે, ${userName}! 😊 હું તમારો સ્વાવલંબી સહાયક છું. ચાલો તમારી પ્રોફાઇલ બનાવીએ. તમે કેવા પ્રકારનું કામ કરો છો? (દા.ત., **દરજી**, **સુથાર**, **પ્લમ્બર**, **વેલ્ડર**, **બ્યુટિશિયન**)`,
+        withoutName: `નમસ્તે! હું તમારો સ્વાવલંબી સહાયક છું. ચાલો તમારી પ્રોફાઇલ બનાવીએ. કહો, તમે કેવા પ્રકારનું કામ કરો છો? (દા.ત., **દરજી**, **સુથાર**, **પ્લમ્બર**, **વેલ્ડર**, **બ્યુટિશિયન**)`
+      },
+      "ml-IN": {
+        withName: `നമസ്കാരം, ${userName}! 😊 ഞാൻ നിങ്ങളുടെ സ്വാവലംബി സഹായകനാണ്. നിങ്ങളുടെ പ്രൊഫൈൽ സൃഷ്ടിക്കാം. നിങ്ങൾ ഏത് തരത്തിലുള്ള ജോലി ചെയ്യുന്നു? (ഉദാ., **ടെയിലർ**, **ആശാരി**, **പ്ലംബർ**, **വെൽഡർ**, **ബ്യൂട്ടീഷ്യൻ**)`,
+        withoutName: `നമസ്കാരം! ഞാൻ നിങ്ങളുടെ സ്വാവലംബി സഹായകനാണ്. നിങ്ങളുടെ പ്രൊഫൈൽ സൃഷ്ടിക്കാം. പറയൂ, നിങ്ങൾ ഏത് തരത്തിലുള്ള ജോലി ചെയ്യുന്നു? (ഉദാ., **ടെയിലർ**, **ആശാരി**, **പ്ലംബർ**, **വെൽഡർ**, **ബ്യൂട്ടീഷ്യൻ**)`
+      },
+      "pa-IN": {
+        withName: `ਸਤ ਸ੍ਰੀ ਅਕਾਲ, ${userName}! 😊 ਮੈਂ ਤੁਹਾਡਾ ਸਵਾਵਲੰਬੀ ਸਹਾਇਕ ਹਾਂ। ਆਓ ਤੁਹਾਡੀ ਪ੍ਰੋਫਾਈਲ ਬਣਾਈਏ। ਤੁਸੀਂ ਕਿਸ ਤਰ੍ਹਾਂ ਦਾ ਕੰਮ ਕਰਦੇ ਹੋ? (ਜਿਵੇਂ, **ਦਰਜ਼ੀ**, **ਤਰਖਾਣ**, **ਪਲੰਬਰ**, **ਵੈਲਡਰ**, **ਬਿਊਟੀਸ਼ੀਅਨ**)`,
+        withoutName: `ਸਤ ਸ੍ਰੀ ਅਕਾਲ! ਮੈਂ ਤੁਹਾਡਾ ਸਵਾਵਲੰਬੀ ਸਹਾਇਕ ਹਾਂ। ਆਓ ਤੁਹਾਡੀ ਪ੍ਰੋਫਾਈਲ ਬਣਾਈਏ। ਦੱਸੋ, ਤੁਸੀਂ ਕਿਸ ਤਰ੍ਹਾਂ ਦਾ ਕੰਮ ਕਰਦੇ ਹੋ? (ਜਿਵੇਂ, **ਦਰਜ਼ੀ**, **ਤਰਖਾਣ**, **ਪਲੰਬਰ**, **ਵੈਲਡਰ**, **ਬਿਊਟੀਸ਼ੀਅਨ**)`
+      },
+      "en-IN": {
+        withName: `Namaste, ${userName}! 😊 I'm your Swavalambi Assistant. Let's build your profile. What kind of work do you do? (e.g., **Tailor**, **Carpenter**, **Plumber**, **Welder**, **Beautician**)`,
+        withoutName: `Namaste! I am your Swavalambi assistant. Let's build your profile. Tell me, what kind of work do you do? (e.g., **Tailor**, **Carpenter**, **Plumber**, **Welder**, **Beautician**)`
+      }
+    };
+
+    const greeting = greetings[langCode] || greetings["en-IN"];
+    return userName ? greeting.withName : greeting.withoutName;
+  };
+
+  // Initialize language and voice preferences
+  useEffect(() => {
+    const initializePreferences = async () => {
+      const userId = localStorage.getItem("swavalambi_user_id");
+      
+      // Try to load from backend first if user is logged in
+      if (userId) {
+        try {
+          const res = await fetch(`${API_BASE}/users/${userId}`);
+          if (res.ok) {
+            const userData = await res.json();
+            
+            // Load language preference from backend
+            if (userData.preferred_language) {
+              setSelectedLanguage(userData.preferred_language);
+              localStorage.setItem("swavalambi_language", userData.preferred_language);
+            } else {
+              // Fallback to localStorage
+              const storedLanguage = localStorage.getItem("swavalambi_language");
+              if (storedLanguage) {
+                setSelectedLanguage(storedLanguage);
+              } else {
+                // Show language selection modal on first visit
+                setShowLanguageModal(true);
+              }
+            }
+            
+            // Load voice auto-play preference from backend
+            if (userData.voice_autoplay !== undefined) {
+              setVoiceAutoPlay(userData.voice_autoplay);
+              localStorage.setItem("swavalambi_voice_autoplay", userData.voice_autoplay.toString());
+            } else {
+              // Fallback to localStorage or default
+              const storedVoiceAutoPlay = localStorage.getItem("swavalambi_voice_autoplay");
+              if (storedVoiceAutoPlay !== null) {
+                setVoiceAutoPlay(storedVoiceAutoPlay === "true");
+              } else {
+                // First time - enable by default
+                setVoiceAutoPlay(true);
+                localStorage.setItem("swavalambi_voice_autoplay", "true");
+              }
+            }
+            return;
+          }
+        } catch (error) {
+          console.error("Failed to load preferences from backend:", error);
+        }
+      }
+      
+      // Fallback: Load from localStorage only
+      const storedLanguage = localStorage.getItem("swavalambi_language");
+      if (storedLanguage) {
+        setSelectedLanguage(storedLanguage);
+      } else {
+        setShowLanguageModal(true);
+      }
+      
+      const storedVoiceAutoPlay = localStorage.getItem("swavalambi_voice_autoplay");
+      if (storedVoiceAutoPlay !== null) {
+        setVoiceAutoPlay(storedVoiceAutoPlay === "true");
+      } else {
+        setVoiceAutoPlay(true);
+        localStorage.setItem("swavalambi_voice_autoplay", "true");
+      }
+    };
+    
+    initializePreferences();
+  }, []);
+
+  // Toggle voice auto-play
+  const toggleVoiceAutoPlay = () => {
+    const newValue = !voiceAutoPlay;
+    setVoiceAutoPlay(newValue);
+    localStorage.setItem("swavalambi_voice_autoplay", newValue.toString());
+    
+    // Save voice preference to backend
+    const userId = localStorage.getItem("swavalambi_user_id");
+    if (userId) {
+      fetch(`${API_BASE}/users/${userId}/preferences?voice_autoplay=${newValue}`, {
+        method: "PUT",
+      }).catch(err => console.error("Failed to save voice preference:", err));
+    }
+  };
+
+  // Close language selector when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (showLanguageSelector) {
+        const target = event.target as HTMLElement;
+        if (!target.closest('.language-selector-container')) {
+          setShowLanguageSelector(false);
+        }
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [showLanguageSelector]);
+
+  const handleLanguageSelect = (languageCode: string) => {
+    setSelectedLanguage(languageCode);
+    localStorage.setItem("swavalambi_language", languageCode);
+    setShowLanguageModal(false);
+    setShowLanguageSelector(false);
+    
+    // Save language preference to backend
+    const userId = localStorage.getItem("swavalambi_user_id");
+    if (userId) {
+      fetch(`${API_BASE}/users/${userId}/preferences?language=${languageCode}`, {
+        method: "PUT",
+      }).catch(err => console.error("Failed to save language preference:", err));
+    }
+    
+    // After language selection, show greeting in selected language
+    const storedName = localStorage.getItem("swavalambi_name") || "";
+    const userName = storedName && !/^\+?\d{7,}$/.test(storedName.trim()) ? storedName : "";
+    const welcomeMessage = getGreeting(languageCode, userName);
+    
+    // Only set greeting if messages are empty (first time)
+    if (messages.length === 0) {
+      const greetingMessageId = "msg-1";
+      setMessages([{ id: greetingMessageId, role: "assistant", content: welcomeMessage }]);
+      
+      // Save greeting to chat history in DynamoDB
+      if (userId) {
+        const initialChat = [{ role: "assistant", content: welcomeMessage }];
+        fetch(`${API_BASE}/users/${userId}/chat-history`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_history: initialChat })
+        }).catch(err => console.error("Failed to save greeting to chat history:", err));
+      }
+      
+      // Auto-play greeting if voice is enabled (only once)
+      if (voiceAutoPlay && !hasPlayedGreetingRef.current) {
+        hasPlayedGreetingRef.current = true;
+        // Small delay to ensure message is rendered
+        setTimeout(() => {
+          playMessage(greetingMessageId, welcomeMessage);
+        }, 500);
+      }
+    }
+  };
+
+  const getCurrentLanguage = () => {
+    return languages.find(lang => lang.code === selectedLanguage) || languages[0];
+  };
+
+  // Load chat history on mount and when returning to this page
   useEffect(() => {
     const loadChatHistory = async () => {
+      setIsLoadingHistory(true);
       const userId = localStorage.getItem("swavalambi_user_id");
       const storedName = localStorage.getItem("swavalambi_name") || "";
       const userName = storedName && !/^\+?\d{7,}$/.test(storedName.trim()) ? storedName : "";
 
-      const buildWelcome = (name: string) => name
-        ? `Namaste, ${name}! 😊 I'm your Swavalambi Assistant. Let's build your profile. What kind of work do you do? (e.g., **Tailoring**, **Plumbing**, **Teaching**)`
-        : `Namaste! I am your Swavalambi assistant. Let's build your profile. Tell me, what kind of work do you do? (e.g., **Tailoring**, **Plumbing**, **Teaching**)`;
+      // Get language from localStorage directly
+      const currentLanguage = localStorage.getItem("swavalambi_language");
+      
+      // If no language selected yet, don't show greeting - language modal will appear
+      if (!currentLanguage) {
+        setIsLoadingHistory(false);
+        return;
+      }
+      
+      // Build welcome message in selected language
+      const buildWelcome = (name: string) => getGreeting(currentLanguage, name);
       
       // Check if this is a reassessment (explicit flag)
       const isReassessment = sessionStorage.getItem("is_reassessment") === "true";
@@ -258,14 +496,47 @@ export default function Assistant() {
         // This is a reassessment - start fresh
         console.log("[INFO] Reassessment detected - starting fresh chat");
         sessionStorage.removeItem("is_reassessment");
-        setMessages([{ id: "msg-1", role: "assistant", content: buildWelcome(userName) }]);
+        const greetingMessage = buildWelcome(userName);
+        setMessages([{ id: "msg-1", role: "assistant", content: greetingMessage }]);
+        
+        // Save greeting to DynamoDB for reassessment
+        if (userId) {
+          const initialChat = [{ role: "assistant", content: greetingMessage }];
+          fetch(`${API_BASE}/users/${userId}/chat-history`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_history: initialChat })
+          }).catch(err => console.error("Failed to save reassessment greeting:", err));
+        }
+        
         setIsLoadingHistory(false);
+        
+        // Auto-play greeting if voice is enabled (only once)
+        const storedVoiceAutoPlay = localStorage.getItem("swavalambi_voice_autoplay");
+        const shouldAutoPlay = storedVoiceAutoPlay === null || storedVoiceAutoPlay === "true";
+        if (shouldAutoPlay && !hasPlayedGreetingRef.current) {
+          hasPlayedGreetingRef.current = true;
+          setTimeout(() => {
+            playMessage("msg-1", greetingMessage);
+          }, 500);
+        }
         return;
       }
       
       if (!userId) {
-        setMessages([{ id: "msg-1", role: "assistant", content: buildWelcome(userName) }]);
+        const greetingMessage = buildWelcome(userName);
+        setMessages([{ id: "msg-1", role: "assistant", content: greetingMessage }]);
         setIsLoadingHistory(false);
+        
+        // Auto-play greeting if voice is enabled (only once)
+        const storedVoiceAutoPlay = localStorage.getItem("swavalambi_voice_autoplay");
+        const shouldAutoPlay = storedVoiceAutoPlay === null || storedVoiceAutoPlay === "true";
+        if (shouldAutoPlay && !hasPlayedGreetingRef.current) {
+          hasPlayedGreetingRef.current = true;
+          setTimeout(() => {
+            playMessage("msg-1", greetingMessage);
+          }, 500);
+        }
         return;
       }
 
@@ -277,31 +548,76 @@ export default function Assistant() {
             const loadedMessages: Message[] = data.chat_history.map((msg: any, idx: number) => ({
               id: `loaded-${idx}`,
               role: msg.role,
-              content: msg.content,
+              content: msg.content || "", // Ensure content is never undefined
               imagePreviewUrl: msg.imagePreviewUrl,
             }));
             setMessages(loadedMessages);
             console.log(`[INFO] Loaded ${loadedMessages.length} messages from history`);
+            
+            // Scroll to bottom after messages are loaded
+            setTimeout(() => {
+              messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+            }, 100);
           } else {
-            setMessages([{ id: "msg-1", role: "assistant", content: buildWelcome(userName) }]);
+            // No chat history - show greeting and auto-play (only once)
+            const greetingMessage = buildWelcome(userName);
+            setMessages([{ id: "msg-1", role: "assistant", content: greetingMessage }]);
+            
+            // Auto-play greeting if voice is enabled
+            const storedVoiceAutoPlay = localStorage.getItem("swavalambi_voice_autoplay");
+            const shouldAutoPlay = storedVoiceAutoPlay === null || storedVoiceAutoPlay === "true";
+            if (shouldAutoPlay && !hasPlayedGreetingRef.current) {
+              hasPlayedGreetingRef.current = true;
+              setTimeout(() => {
+                playMessage("msg-1", greetingMessage);
+              }, 500);
+            }
           }
         } else {
-          setMessages([{ id: "msg-1", role: "assistant", content: buildWelcome(userName) }]);
+          // Error loading - show greeting and auto-play (only once)
+          const greetingMessage = buildWelcome(userName);
+          setMessages([{ id: "msg-1", role: "assistant", content: greetingMessage }]);
+          
+          // Auto-play greeting if voice is enabled
+          const storedVoiceAutoPlay = localStorage.getItem("swavalambi_voice_autoplay");
+          const shouldAutoPlay = storedVoiceAutoPlay === null || storedVoiceAutoPlay === "true";
+          if (shouldAutoPlay && !hasPlayedGreetingRef.current) {
+            hasPlayedGreetingRef.current = true;
+            setTimeout(() => {
+              playMessage("msg-1", greetingMessage);
+            }, 500);
+          }
         }
       } catch (error) {
         console.error("Failed to load chat history:", error);
-        setMessages([{ id: "msg-1", role: "assistant", content: buildWelcome(userName) }]);
+        const greetingMessage = buildWelcome(userName);
+        setMessages([{ id: "msg-1", role: "assistant", content: greetingMessage }]);
+        
+        // Auto-play greeting if voice is enabled (only once)
+        const storedVoiceAutoPlay = localStorage.getItem("swavalambi_voice_autoplay");
+        const shouldAutoPlay = storedVoiceAutoPlay === null || storedVoiceAutoPlay === "true";
+        if (shouldAutoPlay && !hasPlayedGreetingRef.current) {
+          hasPlayedGreetingRef.current = true;
+          setTimeout(() => {
+            playMessage("msg-1", greetingMessage);
+          }, 500);
+        }
       } finally {
         setIsLoadingHistory(false);
       }
     };
 
     loadChatHistory();
-  }, []);
+  }, [location.pathname]); // Reload when navigating back to /assistant
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    // Scroll to bottom when messages change, with a small delay to ensure rendering is complete
+    if (!isLoadingHistory) {
+      setTimeout(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      }, 50);
+    }
+  }, [messages, isLoadingHistory]);
 
   // Cleanup audio on component unmount
   useEffect(() => {
@@ -376,26 +692,30 @@ export default function Assistant() {
   const startRedirectCountdown = (path: string) => {
     setRedirectPath(path);
     setRedirectCountdown(5);
-    setShowRedirectModal(true);
+    
+    // Give user 5 seconds to read the final message before showing modal
+    setTimeout(() => {
+      setShowRedirectModal(true);
 
-    // Clear any existing timer
-    if (redirectTimerRef.current) {
-      clearInterval(redirectTimerRef.current);
-    }
-
-    // Start countdown
-    let count = 5;
-    redirectTimerRef.current = setInterval(() => {
-      count--;
-      setRedirectCountdown(count);
-      
-      if (count <= 0) {
-        if (redirectTimerRef.current) {
-          clearInterval(redirectTimerRef.current);
-        }
-        navigate(path);
+      // Clear any existing timer
+      if (redirectTimerRef.current) {
+        clearInterval(redirectTimerRef.current);
       }
-    }, 1000);
+
+      // Start countdown
+      let count = 5;
+      redirectTimerRef.current = setInterval(() => {
+        count--;
+        setRedirectCountdown(count);
+        
+        if (count <= 0) {
+          if (redirectTimerRef.current) {
+            clearInterval(redirectTimerRef.current);
+          }
+          navigate(path);
+        }
+      }, 1000);
+    }, 5000); // 5 second delay before showing modal
   };
 
   // Cancel redirect
@@ -439,12 +759,10 @@ export default function Assistant() {
         });
       }
       
-      // Clear local messages
+      // Clear local messages with multilingual greeting
       const storedName = localStorage.getItem("swavalambi_name") || "";
       const userName = storedName && !/^\+?\d{7,}$/.test(storedName.trim()) ? storedName : "";
-      const welcomeMessage = userName
-        ? `Namaste, ${userName}! 😊 I'm your Swavalambi Assistant. Let's build your profile. What kind of work do you do? (e.g., **Tailoring**, **Plumbing**, **Teaching**)`
-        : `Namaste! I am your Swavalambi assistant. Let's build your profile. Tell me, what kind of work do you do? (e.g., **Tailoring**, **Plumbing**, **Teaching**)`;
+      const welcomeMessage = getGreeting(selectedLanguage, userName);
       
       setMessages([{ id: "msg-1", role: "assistant", content: welcomeMessage }]);
       
@@ -493,15 +811,21 @@ export default function Assistant() {
       if (!res.ok) throw new Error(`API error: ${res.status}`);
       const data = await res.json();
 
+      const assistantMessageId = (Date.now() + 1).toString();
       setMessages((prev) => [
         ...prev,
         {
-          id: (Date.now() + 1).toString(),
+          id: assistantMessageId,
           role: "assistant",
           content: data.response,
           isReadyForPhoto: data.is_ready_for_photo,
         },
       ]);
+
+      // Auto-play voice if enabled
+      if (voiceAutoPlay && data.response) {
+        playMessage(assistantMessageId, data.response);
+      }
 
       // Cache extracted profile fields for recommendations
       if (data.intent_extracted) {
@@ -696,7 +1020,7 @@ export default function Assistant() {
         {
           id: assistantMessageId,
           role: "assistant",
-          content: data.localized_response,
+          content: data.response_text, // Changed from localized_response to response_text
           isReadyForPhoto: data.is_ready_for_photo,
         },
       ]);
@@ -794,14 +1118,68 @@ export default function Assistant() {
               </span>
             </div>
           </div>
-          <button 
-            onClick={() => setShowClearChatModal(true)}
-            className="p-2 hover:bg-primary/10 rounded-full transition-colors"
-            title="Clear chat history"
-          >
-            <History className="text-slate-700" />
-          </button>
+          <div className="flex items-center gap-1 language-selector-container">
+            <button 
+              onClick={toggleVoiceAutoPlay}
+              className={`p-2 hover:bg-primary/10 rounded-full transition-colors ${
+                voiceAutoPlay ? "bg-primary/10" : ""
+              }`}
+              title={voiceAutoPlay ? "Voice auto-play enabled" : "Voice auto-play disabled"}
+            >
+              {voiceAutoPlay ? (
+                <Volume2 className="text-primary" size={20} />
+              ) : (
+                <VolumeX className="text-slate-400" size={20} />
+              )}
+            </button>
+            <button 
+              onClick={() => setShowLanguageSelector(!showLanguageSelector)}
+              className="p-2 hover:bg-primary/10 rounded-full transition-colors relative"
+              title={`Language: ${getCurrentLanguage().nativeName}`}
+            >
+              <Globe className="text-slate-700" size={20} />
+              <span className="absolute -bottom-1 -right-1 text-xs">
+                {getCurrentLanguage().flag}
+              </span>
+            </button>
+            <button 
+              onClick={() => setShowClearChatModal(true)}
+              className="p-2 hover:bg-primary/10 rounded-full transition-colors"
+              title="Clear chat history"
+            >
+              <History className="text-slate-700" />
+            </button>
+          </div>
         </div>
+
+        {/* Language selector dropdown */}
+        {showLanguageSelector && (
+          <div className="absolute right-4 top-16 bg-white rounded-xl shadow-2xl border border-slate-200 p-2 w-64 max-h-96 overflow-y-auto z-50 language-selector-container">
+            <div className="text-xs font-semibold text-slate-500 px-3 py-2 uppercase tracking-wide">
+              Select Language
+            </div>
+            {languages.map((lang) => (
+              <button
+                key={lang.code}
+                onClick={() => handleLanguageSelect(lang.code)}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-left transition-colors ${
+                  selectedLanguage === lang.code
+                    ? "bg-primary/10 text-primary font-semibold"
+                    : "hover:bg-slate-50 text-slate-700"
+                }`}
+              >
+                <span className="text-2xl">{lang.flag}</span>
+                <div className="flex-1">
+                  <div className="text-sm font-medium">{lang.name}</div>
+                  <div className="text-xs text-slate-500">{lang.nativeName}</div>
+                </div>
+                {selectedLanguage === lang.code && (
+                  <div className="w-2 h-2 bg-primary rounded-full"></div>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
       </header>
 
       <main className="flex-1 overflow-y-auto p-4 space-y-6 mx-auto w-full pb-80">
@@ -864,16 +1242,16 @@ export default function Assistant() {
                   {/* Render markdown for assistant, plain text for user */}
                   {msg.role === "assistant" ? (
                     <div className="space-y-0.5">
-                      {renderMarkdown(msg.content)}
+                      {msg.content ? renderMarkdown(msg.content) : <p className="text-sm text-gray-500">No message content</p>}
                     </div>
                   ) : (
                     <p className="text-sm leading-relaxed whitespace-pre-wrap">
-                      {msg.content}
+                      {msg.content || ""}
                     </p>
                   )}
 
                   {/* Clickable option chips */}
-                  {msg.role === "assistant" &&
+                  {msg.role === "assistant" && msg.content &&
                     (() => {
                       const opts = extractOptions(msg.content);
                       return opts.length > 0 ? (
@@ -953,37 +1331,6 @@ export default function Assistant() {
 
       <div className="fixed bottom-20 left-1/2 -translate-x-1/2 w-full max-w-[480px] px-4 z-20">
         <div className="bg-white rounded-2xl shadow-2xl border border-slate-100 p-4">
-          {/* Language Selector */}
-          <div className="mb-3 flex items-center gap-2">
-            <span className="text-xs font-semibold text-slate-600">Language:</span>
-            <select
-              value={selectedLanguage}
-              onChange={(e) => setSelectedLanguage(e.target.value)}
-              className="text-xs px-3 py-1.5 border border-slate-200 rounded-lg bg-white focus:ring-2 focus:ring-primary/20 focus:border-primary"
-            >
-              <option value="hi-IN">🇮🇳 Hindi</option>
-              <option value="ta-IN">🇮🇳 Tamil</option>
-              <option value="te-IN">🇮🇳 Telugu</option>
-              <option value="mr-IN">🇮🇳 Marathi</option>
-              <option value="kn-IN">🇮🇳 Kannada</option>
-              <option value="ml-IN">🇮🇳 Malayalam</option>
-              <option value="bn-IN">🇮🇳 Bengali</option>
-              <option value="gu-IN">🇮🇳 Gujarati</option>
-              <option value="en-IN">🇬🇧 English</option>
-            </select>
-          </div>
-          
-          <div className="flex items-center justify-center gap-1 mb-4 h-8">
-            <div className="w-1 bg-primary/40 h-3 rounded-full"></div>
-            <div className="w-1 bg-primary/60 h-5 rounded-full"></div>
-            <div className="w-1 bg-primary h-8 rounded-full"></div>
-            <div className="w-1 bg-primary/80 h-6 rounded-full"></div>
-            <div className="w-1 bg-primary/40 h-4 rounded-full"></div>
-            <div className="w-1 bg-primary/60 h-7 rounded-full"></div>
-            <div className="w-1 bg-primary h-5 rounded-full"></div>
-            <div className="w-1 bg-primary/40 h-2 rounded-full"></div>
-          </div>
-
           <div className="flex items-center gap-3">
             <input
               type="file"
@@ -1085,6 +1432,40 @@ export default function Assistant() {
                   Go Now
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Language Selection Modal (First Time) */}
+      {showLanguageModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl">
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                <Languages className="w-8 h-8 text-primary" />
+              </div>
+              <h3 className="text-xl font-bold text-slate-800 mb-2">
+                Choose Your Language
+              </h3>
+              <p className="text-sm text-slate-600">
+                Select your preferred language for voice conversations
+              </p>
+            </div>
+            <div className="space-y-2 max-h-96 overflow-y-auto">
+              {languages.map((lang) => (
+                <button
+                  key={lang.code}
+                  onClick={() => handleLanguageSelect(lang.code)}
+                  className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-all hover:bg-primary/5 hover:scale-[1.02] border-2 border-transparent hover:border-primary/20"
+                >
+                  <span className="text-3xl">{lang.flag}</span>
+                  <div className="flex-1">
+                    <div className="text-base font-semibold text-slate-800">{lang.name}</div>
+                    <div className="text-sm text-slate-500">{lang.nativeName}</div>
+                  </div>
+                </button>
+              ))}
             </div>
           </div>
         </div>

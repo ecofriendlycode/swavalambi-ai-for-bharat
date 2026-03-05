@@ -31,27 +31,67 @@ class VisionAgent:
             self.model_id = os.getenv("BEDROCK_MODEL_ID", "global.anthropic.claude-sonnet-4-5-20250929-v1:0")
 
 
-    def analyze_image(self, image_bytes: bytes, mime_type: str = "image/jpeg") -> dict:
+    def analyze_image(self, image_bytes: bytes, mime_type: str = "image/jpeg", skill: str = None, preferred_language: str = "en-IN") -> dict:
         """
         Sends an image to Claude (via Anthropic API or Bedrock) to evaluate the skill rating.
         Returns a dict with `vision_score` and `feedback`.
         """
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
         
-        system_prompt = "You are a master evaluator of craftsmanship and professional skills..."
+        # Language instruction mapping
+        language_instructions = {
+            "hi-IN": "Respond in Hindi (हिंदी)",
+            "te-IN": "Respond in Telugu (తెలుగు)",
+            "ta-IN": "Respond in Tamil (தமிழ்)",
+            "mr-IN": "Respond in Marathi (मराठी)",
+            "kn-IN": "Respond in Kannada (ಕನ್ನಡ)",
+            "bn-IN": "Respond in Bengali (বাংলা)",
+            "gu-IN": "Respond in Gujarati (ગુજરાતી)",
+            "ml-IN": "Respond in Malayalam (മലയാളം)",
+            "pa-IN": "Respond in Punjabi (ਪੰਜਾਬੀ)",
+            "en-IN": "Respond in English"
+        }
+        language_instruction = language_instructions.get(preferred_language, "Respond in English")
+        
+        # Skill-specific evaluation prompts
+        skill_prompts = {
+            "tailor": "Evaluate this tailoring work sample. Look for stitch quality, pattern alignment, finishing, fabric handling, and overall craftsmanship.",
+            "carpenter": "Evaluate this carpentry work sample. Look for joint quality, surface finish, precision, structural integrity, and overall craftsmanship.",
+            "plumber": "Evaluate this plumbing work sample. Look for installation neatness, pipe alignment, professional finish, proper connections, and overall workmanship.",
+            "welder": "Evaluate this welding work sample. Look for weld bead quality, joint strength, surface finish, structural alignment, and overall craftsmanship.",
+            "beautician": "Evaluate this beauty/makeup work sample. Look for application quality, color matching, blending, technique, and overall professional finish."
+        }
+        
+        skill_context = skill_prompts.get(skill, "Evaluate this work sample for quality and craftsmanship.") if skill else "Evaluate this work sample for quality and craftsmanship."
+        
+        system_prompt = f"You are a master evaluator of {skill or 'professional'} skills and craftsmanship. Provide honest, constructive feedback. Output ONLY valid JSON, nothing else. {language_instruction}."
         
         prompt = f"""
-        Please evaluate the attached image of the user's work sample (e.g., tailoring, plumbing, carpentry).
-        Provide a 'vision_score' between 1 and 5 indicating the quality of the work.
-        1 = Novice/Poor
-        5 = Expert/Excellent
+        {skill_context}
         
-        Also provide a short 1-2 sentence 'feedback' explaining the score.
+        IMPORTANT: {language_instruction}. Write your feedback in the user's language.
         
-        Output MUST be valid JSON only:
+        Provide a 'vision_score' between 1 and 5 indicating the quality of the work:
+        1 = Beginner/Poor quality
+        2 = Developing/Below average
+        3 = Intermediate/Average
+        4 = Advanced/Good quality
+        5 = Expert/Excellent quality
+        
+        Also provide 'feedback' (2-3 sentences) explaining what you observe - be specific about strengths and areas for improvement.
+        
+        CRITICAL RULES:
+        - Output ONLY valid JSON, nothing else
+        - Do NOT mention "Level" or level numbers in the feedback
+        - Do NOT mention "dashboard" or "redirecting"
+        - Do NOT add any text outside the JSON
+        - Keep feedback focused on the work quality only
+        - Write the feedback in {preferred_language.split('-')[0]} language
+        
+        Output format:
         {{
             "vision_score": 4,
-            "feedback": "The stitching is extremely precise..."
+            "feedback": "The work shows good technique..."
         }}
         """
 
@@ -122,9 +162,20 @@ class VisionAgent:
             json_str = output_text[output_text.find("{"):output_text.rfind("}")+1]
             result = json.loads(json_str)
             
+            # Clean up feedback - remove any unwanted text
+            feedback = result.get("feedback", "No feedback provided.")
+            
+            # Remove any mentions of "Level X", "dashboard", "redirecting", etc.
+            import re
+            feedback = re.sub(r'\s*You have been assigned\s+Level\s+\d+\.?', '', feedback, flags=re.IGNORECASE)
+            feedback = re.sub(r'\s*Level\s+\d+\.?', '', feedback, flags=re.IGNORECASE)
+            feedback = re.sub(r'\s*Redirecting you to.*?dashboard.*?\.', '', feedback, flags=re.IGNORECASE)
+            feedback = re.sub(r'\s*Redirecting.*?\.', '', feedback, flags=re.IGNORECASE)
+            feedback = feedback.strip()
+            
             return {
                 "vision_score": result.get("vision_score", 1),
-                "feedback": result.get("feedback", "No feedback provided.")
+                "feedback": feedback
             }
             
         except Exception as e:

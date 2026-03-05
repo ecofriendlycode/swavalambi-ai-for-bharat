@@ -31,6 +31,8 @@ def create_or_update_user(user_id: str, name: str) -> dict:
     """
     Upsert a user record. Only sets name + created_at if not already present
     (so re-registration doesn't wipe assessment data).
+    
+    Note: For Cognito users, user_id is the email address.
     """
     table = _get_table()
     now = datetime.now(timezone.utc).isoformat()
@@ -49,6 +51,46 @@ def create_or_update_user(user_id: str, name: str) -> dict:
     return {"user_id": user_id, "name": name}
 
 
+def update_user_preferences(
+    user_id: str,
+    language: Optional[str] = None,
+    voice_autoplay: Optional[bool] = None
+) -> None:
+    """
+    Update user preferences like language and voice auto-play settings.
+    
+    Args:
+        user_id: User's phone number
+        language: Language code (e.g., 'hi-IN', 'te-IN')
+        voice_autoplay: Whether voice auto-play is enabled
+    """
+    table = _get_table()
+    now = datetime.now(timezone.utc).isoformat()
+    
+    update_parts = []
+    attr_values = {":now": now}
+    
+    if language is not None:
+        update_parts.append("preferred_language = :lang")
+        attr_values[":lang"] = language
+    
+    if voice_autoplay is not None:
+        update_parts.append("voice_autoplay = :voice")
+        attr_values[":voice"] = voice_autoplay
+    
+    if not update_parts:
+        return  # Nothing to update
+    
+    update_expr = "SET " + ", ".join(update_parts) + ", updated_at = :now"
+    
+    table.update_item(
+        Key={"user_id": user_id},
+        UpdateExpression=update_expr,
+        ExpressionAttributeValues=attr_values
+    )
+    logger.info(f"Updated preferences for user {user_id}: language={language}, voice_autoplay={voice_autoplay}")
+
+
 def save_assessment(
     user_id: str,
     skill: str,
@@ -58,9 +100,14 @@ def save_assessment(
     session_id: Optional[str] = None,
 ) -> None:
     """
-    Persist the result of a skill assessment + profiling conversation.
-    Called after vision analysis completes.
+    DEPRECATED: Use save_profile_assessment() instead.
+    
+    Legacy function that saves assessment data to root-level fields.
+    This creates duplication and is kept only for backward compatibility.
+    Will be removed in a future version.
     """
+    logger.warning(f"save_assessment() is deprecated. Use save_profile_assessment() instead.")
+    
     table = _get_table()
     now = datetime.now(timezone.utc).isoformat()
 
@@ -90,74 +137,69 @@ def save_assessment(
 
 def save_profile_assessment(
     user_id: str,
-    profile_data: dict
+    profile_data: dict,
+    merge: bool = True
 ) -> None:
     """
-    Save the complete profile assessment data from the profiling agent.
-    Stores the structured assessment in DynamoDB with flexible schema.
+    Save or update the profile assessment data.
+    All data is stored in the profile_assessment object only - no duplication.
     
     Args:
         user_id: User's phone number
-        profile_data: Dictionary containing any key-value pairs extracted by the agent
-                     (flexible schema to support dynamic questions)
+        profile_data: Dictionary containing assessment data
+        merge: If True, merges with existing profile_assessment; if False, replaces it
     """
     logger.info(f"[SAVE_PROFILE] Starting save for user {user_id}")
-    logger.info(f"[SAVE_PROFILE] Profile data keys: {list(profile_data.keys())}")
     logger.info(f"[SAVE_PROFILE] Profile data: {profile_data}")
     
     table = _get_table()
     now = datetime.now(timezone.utc).isoformat()
     
-    # Add metadata to profile data
-    profile_data_with_meta = {
-        **profile_data,
-        "assessment_timestamp": now,
-        "assessment_version": "1.0"
-    }
-
-    # Update DynamoDB with complete profile data and key fields for quick access
-    update_expr_parts = ["profile_assessment = :profile", "updated_at = :now"]
-    expr_values = {
-        ":profile": profile_data_with_meta,
-        ":now": now,
-    }
+    if merge:
+        # Get existing profile_assessment to merge with new data
+        try:
+            existing_user = get_user(user_id)
+            existing_profile = existing_user.get("profile_assessment", {}) if existing_user else {}
+            
+            # Merge: existing data + new data (new data overwrites on conflict)
+            merged_data = {**existing_profile, **profile_data}
+            merged_data["updated_at"] = now
+            
+            # Keep the original assessment_timestamp if it exists
+            if "assessment_timestamp" not in merged_data:
+                merged_data["assessment_timestamp"] = now
+            
+            # Update version
+            merged_data["assessment_version"] = "1.0"
+            
+            profile_to_save = merged_data
+        except Exception as e:
+            logger.warning(f"Failed to merge profile data, saving as new: {e}")
+            profile_to_save = {
+                **profile_data,
+                "assessment_timestamp": now,
+                "updated_at": now,
+                "assessment_version": "1.0"
+            }
+    else:
+        # Replace completely
+        profile_to_save = {
+            **profile_data,
+            "assessment_timestamp": now,
+            "updated_at": now,
+            "assessment_version": "1.0"
+        }
     
-    # Dynamically add common fields if present (for backward compatibility and quick queries)
-    if "profession_skill" in profile_data:
-        update_expr_parts.append("skill = :skill")
-        expr_values[":skill"] = profile_data["profession_skill"]
-        logger.info(f"[SAVE_PROFILE] Setting skill = {profile_data['profession_skill']}")
-    
-    if "intent" in profile_data:
-        update_expr_parts.append("intent = :intent")
-        expr_values[":intent"] = profile_data["intent"]
-        logger.info(f"[SAVE_PROFILE] Setting intent = {profile_data['intent']}")
-    
-    if "theory_score" in profile_data:
-        update_expr_parts.append("theory_score = :theory")
-        expr_values[":theory"] = profile_data["theory_score"]
-        logger.info(f"[SAVE_PROFILE] Setting theory_score = {profile_data['theory_score']}")
-    
-    if "gender" in profile_data:
-        update_expr_parts.append("gender = :gender")
-        expr_values[":gender"] = profile_data["gender"]
-        logger.info(f"[SAVE_PROFILE] Setting gender = {profile_data['gender']}")
-    
-    if "preferred_location" in profile_data:
-        update_expr_parts.append("preferred_location = :location")
-        expr_values[":location"] = profile_data["preferred_location"]
-        logger.info(f"[SAVE_PROFILE] Setting preferred_location = {profile_data['preferred_location']}")
-
-    update_expression = "SET " + ", ".join(update_expr_parts)
-    logger.info(f"[SAVE_PROFILE] Update expression: {update_expression}")
-    logger.info(f"[SAVE_PROFILE] Expression values: {expr_values}")
-    
+    # Save only to profile_assessment - no root-level duplication
     table.update_item(
         Key={"user_id": user_id},
-        UpdateExpression=update_expression,
-        ExpressionAttributeValues=expr_values
+        UpdateExpression="SET profile_assessment = :profile, updated_at = :now",
+        ExpressionAttributeValues={
+            ":profile": profile_to_save,
+            ":now": now
+        }
     )
-    logger.info(f"[SAVE_PROFILE] Successfully saved profile assessment for {user_id}: {profile_data.get('profession_skill', 'N/A')}, theory={profile_data.get('theory_score', 'N/A')}")
+    logger.info(f"[SAVE_PROFILE] Successfully saved profile assessment for {user_id}")
 
 
 def get_user(user_id: str) -> Optional[dict]:
@@ -224,8 +266,11 @@ def clear_chat_history(user_id: str) -> None:
 def reset_assessment(user_id: str) -> None:
     """
     Completely resets a user's assessment data for retaking the assessment.
-    Clears: skill, skill_rating, theory_score, intent, chat_history, session_id, profile_assessment
-    Keeps: name, created_at, profile_picture, vision_upload_history
+    Clears: profile_assessment, chat_history, session_id
+    Keeps: name, created_at, profile_picture, vision_upload_history, user_id
+    
+    Note: Old root-level fields (skill, skill_rating, theory_score, intent, gender, 
+    preferred_location) are also cleared for backward compatibility.
     """
     table = _get_table()
     now = datetime.now(timezone.utc).isoformat()

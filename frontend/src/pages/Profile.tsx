@@ -30,6 +30,8 @@ export default function Profile() {
   const [intent, setIntent] = useState('job');
   const [profilePicture, setProfilePicture] = useState<string | null>(null);
   const [showReassessmentWarning, setShowReassessmentWarning] = useState(false);
+  const [showDeleteAccountWarning, setShowDeleteAccountWarning] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const accountSettingsRef = useRef<HTMLDivElement>(null);
   const { uploadProfilePicture, isUploading } = useProfilePictureUpload();
@@ -47,6 +49,44 @@ export default function Profile() {
     sessionStorage.clear();
     // Redirect to login page
     navigate('/login', { replace: true });
+  };
+
+  const handleDeleteAccount = async () => {
+    const userId = localStorage.getItem("swavalambi_user_id");
+    
+    if (!userId || userId === 'demo') {
+      alert('Cannot delete demo account');
+      return;
+    }
+
+    setIsDeleting(true);
+
+    try {
+      const response = await fetch(`${API_BASE}/users/${userId}/account`, {
+        method: 'DELETE'
+      });
+
+      if (response.ok) {
+        // Clear all local data
+        localStorage.clear();
+        sessionStorage.clear();
+        
+        // Redirect to login with success message
+        navigate('/login', { 
+          replace: true,
+          state: { message: 'Your account has been deleted successfully' }
+        });
+      } else {
+        const error = await response.json();
+        alert(`Failed to delete account: ${error.detail || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('Error deleting account:', error);
+      alert('Failed to delete account. Please try again.');
+    } finally {
+      setIsDeleting(false);
+      setShowDeleteAccountWarning(false);
+    }
   };
 
   const handleReassessment = async () => {
@@ -391,6 +431,27 @@ export default function Profile() {
             </div>
             <p className="font-semibold text-sm text-red-600 flex-1 text-left" style={{ pointerEvents: 'none' }}>Logout</p>
           </button>
+
+          <button
+            onClick={() => setShowDeleteAccountWarning(true)}
+            type="button"
+            style={{ cursor: 'pointer' }}
+            className="flex items-center gap-4 p-4 bg-white rounded-xl border border-red-200 hover:bg-red-50 active:bg-red-100 transition-colors shadow-sm w-full mt-2 relative z-10"
+          >
+            <div className="size-10 rounded-full bg-red-100 flex items-center justify-center text-red-600 shrink-0" style={{ pointerEvents: 'none' }}>
+              <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 6h18"/>
+                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                <line x1="10" y1="11" x2="10" y2="17"/>
+                <line x1="14" y1="11" x2="14" y2="17"/>
+              </svg>
+            </div>
+            <div className="flex-1 text-left" style={{ pointerEvents: 'none' }}>
+              <p className="font-semibold text-sm text-red-600">Delete Account</p>
+              <p className="text-xs text-red-500">Permanently delete your account and data</p>
+            </div>
+          </button>
         </section>
       </main>
 
@@ -437,6 +498,62 @@ export default function Profile() {
                 className="flex-1 px-4 py-3 bg-primary hover:bg-primary-dark text-white font-semibold rounded-xl transition-colors text-sm"
               >
                 Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Account Warning Modal */}
+      {showDeleteAccountWarning && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl">
+            <div className="flex items-center justify-center w-16 h-16 bg-red-100 rounded-full mx-auto mb-4">
+              <span className="text-3xl">🗑️</span>
+            </div>
+            
+            <h3 className="text-xl font-bold text-center text-gray-800 mb-2">
+              Delete Account?
+            </h3>
+            
+            <p className="text-sm text-gray-600 text-center mb-4 leading-relaxed">
+              This will permanently delete your account and all associated data. This action cannot be undone.
+            </p>
+            
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 mb-6">
+              <p className="text-xs text-red-800 font-medium">
+                ⚠️ This will permanently delete:
+              </p>
+              <ul className="text-xs text-red-700 mt-2 space-y-1 ml-4">
+                <li>• Your profile and personal information</li>
+                <li>• All assessment data and skill ratings</li>
+                <li>• Chat history and conversations</li>
+                <li>• Profile picture and work samples</li>
+                <li>• All saved documents and certificates</li>
+              </ul>
+            </div>
+            
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowDeleteAccountWarning(false)}
+                disabled={isDeleting}
+                className="flex-1 px-4 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl transition-colors text-sm disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteAccount}
+                disabled={isDeleting}
+                className="flex-1 px-4 py-3 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-xl transition-colors text-sm disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {isDeleting ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    Deleting...
+                  </>
+                ) : (
+                  'Delete Account'
+                )}
               </button>
             </div>
           </div>

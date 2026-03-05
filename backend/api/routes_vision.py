@@ -4,12 +4,13 @@ import uuid
 import time
 from PIL import Image
 from io import BytesIO
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from typing import Optional
 from schemas.models import VisionScoreResponse
 from agents.vision_agent import VisionAgent
-from services.dynamodb_service import save_assessment, get_user, update_chat_history
+from services.dynamodb_service import get_user, update_chat_history
 import logging
 
 logger = logging.getLogger(__name__)
@@ -165,8 +166,18 @@ async def analyze_vision(
             logger.warning(f"Rate limit exceeded for user {user_id}")
             raise HTTPException(status_code=429, detail=rate_limit_msg)
     
-    # Analyze image
-    result = get_vision_agent().analyze_image(content, mime_type)
+    # Get user's preferred language
+    preferred_language = "en-IN"  # default
+    if user_id:
+        try:
+            user_data = get_user(user_id)
+            if user_data and "preferred_language" in user_data:
+                preferred_language = user_data["preferred_language"]
+        except Exception as e:
+            logger.warning(f"Failed to get preferred language: {e}")
+    
+    # Analyze image with skill context and language
+    result = get_vision_agent().analyze_image(content, mime_type, skill=skill, preferred_language=preferred_language)
     vision_score = result["vision_score"]
     
     if theory_score is not None and theory_score > 0:
@@ -178,16 +189,21 @@ async def analyze_vision(
     # Persist assessment to DynamoDB if we have a user_id
     if user_id:
         try:
-            save_assessment(
-                user_id=user_id,
-                skill=skill or "",
-                intent=intent or "job",
-                skill_rating=final_skill_rating,
-                theory_score=theory_score or 0,
-                session_id=session_id,
-            )
+            # Save work sample assessment to profile_assessment (merges with existing data)
+            from services.dynamodb_service import save_profile_assessment
+            
+            vision_assessment = {
+                "work_sample_score": final_skill_rating,  # Vision-based skill rating
+                "work_sample_feedback": result.get("feedback", ""),  # AI feedback on the work sample
+                "work_sample_timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            
+            # Merge with existing profile_assessment (doesn't overwrite chat agent data)
+            save_profile_assessment(user_id=user_id, profile_data=vision_assessment, merge=True)
+            
+            logger.info(f"Saved work sample assessment for {user_id}: score={final_skill_rating}")
         except Exception as e:
-            logger.warning(f"DynamoDB save_assessment failed (non-fatal): {e}")
+            logger.warning(f"DynamoDB save_profile_assessment failed (non-fatal): {e}")
         
         # Update upload history for rate limiting
         update_upload_history(user_id)
@@ -235,7 +251,7 @@ async def analyze_vision(
                 })
                 chat_history.append({
                     "role": "assistant",
-                    "content": f"I've analyzed your work! {result['feedback']} You have been assigned **Level {final_skill_rating}**."
+                    "content": f"I've analyzed your work! {result['feedback']}"
                 })
                 
                 update_chat_history(user_id, chat_history)

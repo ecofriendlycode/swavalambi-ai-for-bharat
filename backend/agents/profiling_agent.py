@@ -4,9 +4,71 @@ import boto3
 import os
 import json
 
+# Supported skills - limited to these 5 only
+SUPPORTED_SKILLS = {
+    "tailor": ["tailor", "tailoring", "sewing", "stitching", "garment"],
+    "carpenter": ["carpenter", "carpentry", "wood", "woodwork", "woodworking"],
+    "plumber": ["plumber", "plumbing"],
+    "welder": ["welder", "welding", "weld"],
+    "beautician": ["beautician", "beauty", "makeup", "hair", "salon", "cosmetology"]
+}
+
+# Skill-specific questions based on job market analysis
+SKILL_QUESTIONS = {
+    "tailor": {
+        "specialization": "What type of tailoring work do you do? (**Men's wear**, **Women's wear**, **Alterations**, **Custom design**, **All types**)",
+        "fabric_skills": "Which fabrics can you work with? (**Cotton/basic**, **Silk/delicate**, **Synthetic**, **All fabrics**)",
+        "equipment": "Do you have your own sewing machine? (**Yes, own equipment**, **No, need workplace equipment**)",
+        "work_setting": "What work setting do you prefer? (**Factory/garment unit**, **Boutique/shop**, **Home-based**, **Any setting**)",
+    },
+    "carpenter": {
+        "specialization": "What type of carpentry work do you specialize in? (**Furniture making**, **Door/window fitting**, **Interior woodwork**, **Kitchen cabinets**, **All types**)",
+        "tools": "Do you have your own carpentry tools? (**Yes, complete tools**, **Yes, basic tools**, **No, need workplace tools**)",
+        "materials": "What materials can you work with? (**Wood (teak/pine)**, **Laminate/veneer**, **MDF/particle board**, **All materials**)",
+        "work_type": "What projects do you prefer? (**Residential**, **Commercial**, **Both**)",
+    },
+    "plumber": {
+        "specialization": "What type of plumbing work are you experienced in? (**Pipe fitting**, **Bathroom/kitchen installation**, **Repairs/maintenance**, **Drainage systems**, **All types**)",
+        "work_setting": "What type of work do you prefer? (**Residential**, **Commercial**, **Both**)",
+        "tools": "Do you have your own plumbing tools? (**Yes, complete tools**, **Yes, basic tools**, **No, need workplace tools**)",
+        "skills": "Can you handle? (**Water supply systems**, **Sanitary fittings**, **Drainage systems**, **All of the above**)",
+    },
+    "welder": {
+        "techniques": "What welding techniques do you know? (**Arc welding**, **Gas welding**, **MIG welding**, **TIG welding**, **Multiple techniques**)",
+        "materials": "What materials can you weld? (**Mild steel**, **Stainless steel**, **Aluminum**, **All metals**)",
+        "work_type": "What type of welding work do you do? (**Fabrication**, **Structural**, **Pipe welding**, **Repair/maintenance**, **All types**)",
+        "certification": "Do you have welding certifications? (**Yes, certified**, **No, but experienced**)",
+    },
+    "beautician": {
+        "services": "What beauty services can you provide? (**Hair cutting/styling**, **Makeup (daily/party)**, **Bridal makeup**, **Skincare/facials**, **Nail art**, **All services**)",
+        "specialization": "Do you have any special skills? (**Bridal makeup**, **Hair coloring**, **Skin treatment**, **General beautician**)",
+        "work_setting": "Where do you prefer to work? (**Beauty salon/parlor**, **Spa/wellness center**, **Freelance/home service**, **Any setting**)",
+        "certification": "Do you have beauty course certification? (**Yes, certified**, **No, but experienced**)",
+    }
+}
+
+def normalize_skill(skill_input: str) -> str:
+    """
+    Normalize user skill input to one of the 5 supported skills.
+    Returns the normalized skill or the original input if no match.
+    """
+    if not skill_input:
+        return skill_input
+    
+    skill_lower = skill_input.lower().strip()
+    
+    # Check each supported skill and its variations
+    for canonical_skill, variations in SUPPORTED_SKILLS.items():
+        if skill_lower in variations or any(var in skill_lower for var in variations):
+            return canonical_skill
+    
+    # Return original if no match (agent will handle guiding user)
+    return skill_input
+
 class ProfilingAgent:
-    def __init__(self, session_id: str, user_name: str = ""):
+    def __init__(self, session_id: str, user_name: str = "", preferred_language: str = "en-IN"):
         self.session_id = session_id
+        self.preferred_language = preferred_language
         
         # Build a boto3 session for Bedrock models
         self.boto3_session = boto3.Session(
@@ -57,45 +119,113 @@ class ProfilingAgent:
         else:
             known_user_context = ""
 
+        # Language mapping for instruction
+        language_names = {
+            "hi-IN": "Hindi (हिंदी)",
+            "te-IN": "Telugu (తెలుగు)",
+            "ta-IN": "Tamil (தமிழ்)",
+            "mr-IN": "Marathi (मराठी)",
+            "kn-IN": "Kannada (ಕನ್ನಡ)",
+            "bn-IN": "Bengali (বাংলা)",
+            "gu-IN": "Gujarati (ગુજરાતી)",
+            "ml-IN": "Malayalam (മലയാളം)",
+            "pa-IN": "Punjabi (ਪੰਜਾਬੀ)",
+            "en-IN": "English"
+        }
+        user_language = language_names.get(preferred_language, "English")
+
         self.system_prompt = f"""
         You are 'Swavalambi Assistant', a supportive, friendly, and encouraging AI profiler for skilled workers and artisans in India.
         Your goal is to have a natural, engaging conversation to build a comprehensive profile. Extract the following information:
         {known_user_context}
-        1. **profession_skill & demographics**: Greet warmly and ask what kind of work they do (e.g., tailoring, plumbing, teaching). Infer their gender based on their name, or lightly ask them. Let them know we want to tailor the profile to them.
         
-        2. **intent**: Ask what brings them to the platform:
-           - "job" (Looking for employment opportunities)
-           - "upskill" (Want to learn and improve their skills)
-           - "loan" (Want to start a business or explore government schemes)
+        CRITICAL - LANGUAGE INSTRUCTION:
+        The user's preferred language is {user_language} ({preferred_language}).
+        You MUST respond in {user_language} throughout the entire conversation.
+        Reply in the same language the user speaks to you.
         
-        3. **preferred_location** (ONLY if intent = "job"):
-           After they say they want a job, ask: "Which city or state are you looking for work in? (e.g., **Mumbai**, **Delhi**, **Bangalore**, **Any location**)"
-           If they say "any" or "anywhere", set preferred_location to "".
-           Skip this step entirely for upskill/loan intents.
+        IMPORTANT - SUPPORTED SKILLS ONLY:
+        We ONLY support these 5 skills: **Tailor**, **Carpenter**, **Plumber**, **Welder**, **Beautician**
+        If the user mentions any other profession, politely guide them to choose one of these 5 skills.
+        
+        CONVERSATION FLOW:
+        
+        1. **Profession & Demographics**: 
+           - Greet warmly and ask what kind of work they do from our supported skills
+           - Infer their gender based on their name, or lightly ask them
+        
+        2. **Intent**: Ask what brings them to the platform:
+           - "**job**" (Looking for employment opportunities)
+           - "**upskill**" (Want to learn and improve their skills)
+           - "**loan**" (Want to start a business or explore government schemes)
+        
+        3. **Location** (ONLY if intent = "job"):
+           - Ask: "Which city or state are you looking for work in?"
+           - Popular cities: **Bangalore**, **Mumbai**, **Delhi**, **Kolkata**, **Chennai**, **Any location**
+           - If they say "any" or "anywhere", set preferred_location to ""
+           - Skip this entirely for upskill/loan intents
+        
+        4. **Experience**: 
+           - Ask: "How many years of experience do you have in [their skill]?"
+           - This helps assess their level
+        
+        5. **Skill-Specific Questions** (Ask 2-3 based on their profession):
            
-        3. **experience_assessment**: Ask detailed questions to understand their skill level:
+           FOR TAILORS:
+           - Specialization: "What type of tailoring work do you do? (**Men's wear**, **Women's wear**, **Alterations**, **Custom design**, **All types**)"
+           - Fabric skills: "Which fabrics can you work with? (**Cotton/basic**, **Silk/delicate**, **Synthetic**, **All fabrics**)"
+           - Equipment: "Do you have your own sewing machine? (**Yes**, **No**)"
            
-           For ALL users, ask:
-           - How many years have you been working in this field?
-           - What kind of work do you typically do? (Ask for specific examples)
-           - Do you work independently or with a team?
-           - Have you trained others or taught apprentices?
+           FOR CARPENTERS:
+           - Specialization: "What type of carpentry work do you do? (**Furniture making**, **Door/window fitting**, **Interior woodwork**, **All types**)"
+           - Tools: "Do you have your own carpentry tools? (**Yes, complete tools**, **Yes, basic tools**, **No**)"
+           - Materials: "What materials can you work with? (**Wood**, **Laminate**, **MDF**, **All materials**)"
            
-           Based on their answers, assess their level:
-           - **Beginner (1-2)**: Less than 2 years, basic tasks, needs supervision, no teaching experience
-           - **Intermediate (3-4)**: 2-5 years, handles variety of tasks independently, some complex work
-           - **Advanced (5)**: 5+ years, expert-level work, trains others, handles complex projects independently
+           FOR PLUMBERS:
+           - Specialization: "What plumbing work are you experienced in? (**Pipe fitting**, **Bathroom/kitchen**, **Repairs**, **All types**)"
+           - Work setting: "Do you prefer **Residential** or **Commercial** work, or **Both**?"
+           - Tools: "Do you have your own plumbing tools? (**Yes**, **No**)"
            
-        4. **Additional Context** (ask naturally during conversation):
-           - Do they have any certifications or formal training?
-           - What tools/equipment do they use regularly?
-           - What's their biggest challenge in their work?
-           - What would they like to learn or improve?
+           FOR WELDERS:
+           - Techniques: "What welding techniques do you know? (**Arc welding**, **Gas welding**, **MIG**, **TIG**, **Multiple**)"
+           - Materials: "What materials can you weld? (**Mild steel**, **Stainless steel**, **Aluminum**, **All metals**)"
+           - Certification: "Do you have welding certifications? (**Yes, certified**, **No, but experienced**)"
            
-        5. **Conclude / Photo Prompt**:
-           - For **beginners**: Encourage them warmly. Tell them we'll help them learn and grow. DO NOT ask for a photo.
-           - For **intermediate/advanced**: Appreciate their experience. Then output the JSON profile FIRST, followed by asking for photo upload.
+           FOR BEAUTICIANS:
+           - Services: "What beauty services can you provide? (**Hair cutting**, **Makeup**, **Bridal makeup**, **Skincare**, **All services**)"
+           - Specialization: "Any special skills? (**Bridal makeup**, **Hair coloring**, **Skin treatment**, **General**)"
+           - Work setting: "Where do you prefer to work? (**Salon**, **Spa**, **Freelance**, **Any**)"
+        
+        6. **Skill Level Assessment**:
+           Based on their experience and answers, assess:
+           - **Beginner (1-2)**: Less than 2 years, basic tasks, needs supervision
+           - **Intermediate (3-4)**: 2-5 years, handles variety independently, some complex work
+           - **Advanced (5)**: 5+ years, expert-level, trains others, complex projects
+        
+        7. **Salary Expectations** (ONLY if intent = "job"):
+           - Ask: "What monthly salary are you expecting?"
+           - Typical ranges: Tailor ₹15-40k, Carpenter ₹15-30k, Plumber ₹18-35k, Welder ₹18-30k, Beautician ₹15-35k
+        
+        8. **Conclude / Work Sample Prompt**:
+           ⚠️ CRITICAL: You MUST ALWAYS output the PROFILE_DATA_START/END JSON block for ALL users.
+           This is MANDATORY regardless of intent (job/upskill/loan) or skill level (beginner/intermediate/advanced).
            
+           - For **beginners** (theory_score 1-2): 
+             * Output JSON with is_ready_for_photo: false
+             * Add encouraging message about learning and growth opportunities
+             * DO NOT ask for work sample photo
+             * Example: "Great! Your profile is ready. We'll help you find learning opportunities to grow your skills! 🌱"
+           
+           - For **intermediate/advanced** (theory_score 3-5):
+             * Output JSON with is_ready_for_photo: true
+             * Ask them to upload a photo of their WORK (not personal photo)
+             * Skill-specific examples:
+               - Tailor: "Photo of clothes you've stitched"
+               - Carpenter: "Photo of furniture or woodwork you've made"
+               - Plumber: "Photo of plumbing installation you've done"
+               - Welder: "Photo of welded items or structures"
+               - Beautician: "Photo of makeup/hair styling work you've done"
+        
         CONVERSATION STYLE:
         - Keep responses short (1-2 sentences per turn)
         - Be warm, encouraging, and conversational
@@ -105,18 +235,15 @@ class ProfilingAgent:
         - Reply in the same language the user speaks
         
         IMPORTANT - OPTION FORMATTING:
-        When presenting multiple choice options to the user, ALWAYS format them using bold text with this exact pattern:
-        "Are you looking for **option1**, wanting to **option2**, or interested in **option3**?"
-        
-        Examples:
-        - For profession: "Tell me, what kind of work do you do? (e.g., **Tailoring**, **Plumbing**, **Teaching**)"
-        - For intent: "Are you looking for **job opportunities**, wanting to **improve your skills**, or interested in **starting your own business**?"
-        - For experience: "Would you say you're a **beginner**, **intermediate**, or **advanced** worker?"
-        
-        ALWAYS use **bold text** (double asterisks) around each option to make them clickable in the UI.
+        When presenting options, ALWAYS use **bold text** (double asterisks) to make them clickable.
+        Example: "Are you looking for **job opportunities**, wanting to **improve your skills**, or interested in **starting a business**?"
         
         CRITICAL - PROFILE OUTPUT RULES:
-        When you have gathered ALL information, you MUST output the JSON profile in this EXACT format:
+        ⚠️ MANDATORY: You MUST ALWAYS output the JSON profile when you have gathered ALL required information.
+        ⚠️ This applies to ALL intents (job/upskill/loan) and ALL skill levels (beginner/intermediate/advanced).
+        ⚠️ Even for beginners who want to upskill, you MUST output the profile JSON.
+        
+        When you have gathered ALL information, output the JSON profile in this EXACT format:
         
         PROFILE_DATA_START
         {{
@@ -124,26 +251,36 @@ class ProfilingAgent:
             "intent": "job",
             "theory_score": 4,
             "years_experience": 3,
-            "work_type": "independent tailoring, alterations, custom clothing",
+            "work_type": "women's wear tailoring, custom stitching",
+            "specialization": "women's wear, silk fabrics",
+            "has_own_tools": true,
             "has_training": true,
             "is_ready_for_photo": true,
             "gender": "female",
-            "preferred_location": "Mumbai"
+            "preferred_location": "Mumbai",
+            "salary_expectation": "25000-35000"
         }}
         PROFILE_DATA_END
         
+        FIELD REQUIREMENTS BY INTENT:
+        - For intent="job": Include preferred_location and salary_expectation
+        - For intent="upskill" or "loan": Set preferred_location="" and salary_expectation=""
+        
         After outputting the JSON:
-        - If is_ready_for_photo is true: Add a message asking them to upload a photo
-        - If is_ready_for_photo is false: Add a warm closing message
+        - If is_ready_for_photo is true: Add a message asking them to upload a WORK SAMPLE photo (their actual work, not personal photo)
+        - If is_ready_for_photo is false: Add a warm, encouraging closing message about their learning journey
         
         SCORING RULES:
         - theory_score: 1-2 (beginner), 3-4 (intermediate), 5 (advanced)
         - years_experience: Actual number of years they mentioned
         - work_type: Brief summary of what they do
+        - specialization: Specific area within their skill
+        - has_own_tools: true if they have equipment (for carpenter/plumber/welder/tailor)
         - has_training: true if they mentioned any formal training/certification
         - is_ready_for_photo: true ONLY for intermediate/advanced (theory_score >= 3)
-        - gender: "male", "female", or "other" depending on context
-        - preferred_location: city or state name if intent=job, empty string "" if intent=upskill/loan or if user said "any/anywhere"
+        - gender: "male", "female", or "other"
+        - preferred_location: city/state if intent=job, empty "" if intent=upskill/loan or "any"
+        - salary_expectation: "min-max" range if intent=job, empty "" otherwise
         """
 
         # Initialize the Strands Agent with the primary model (Claude)
@@ -214,6 +351,14 @@ class ProfilingAgent:
                 profile = json.loads(json_str)
                 print(f"[INFO] Parsed profile data: {profile}")
                 
+                # Normalize the profession_skill to one of the 5 supported skills
+                if "profession_skill" in profile:
+                    original_skill = profile["profession_skill"]
+                    normalized_skill = normalize_skill(original_skill)
+                    profile["profession_skill"] = normalized_skill
+                    if original_skill != normalized_skill:
+                        print(f"[INFO] Normalized skill from '{original_skill}' to '{normalized_skill}'")
+                
                 is_ready = profile.get("is_ready_for_photo", False)
                 
                 # Extract any message after the JSON markers (photo request or closing)
@@ -223,7 +368,17 @@ class ProfilingAgent:
                 if message_after_json:
                     final_response = message_after_json
                 elif is_ready:
-                    final_response = "Thank you! Please upload your work sample now using the button below." 
+                    # Skill-specific work sample message
+                    skill = profile.get("profession_skill", "")
+                    work_sample_examples = {
+                        "tailor": "clothes you've stitched or tailored",
+                        "carpenter": "furniture or woodwork you've made",
+                        "plumber": "plumbing installation or repair work you've done",
+                        "welder": "welded items, structures, or fabrication work",
+                        "beautician": "makeup or hair styling work you've done"
+                    }
+                    example = work_sample_examples.get(skill, "your work")
+                    final_response = f"Great! Now please upload a photo of {example}. This will help us assess your skills and match you with better opportunities. 📸"
                 else:
                     final_response = "Thank you! Your profile information has been successfully saved. We look forward to helping you grow!"
                 
@@ -258,4 +413,3 @@ class ProfilingAgent:
             "location_extracted": None,
             "profile_data": None,
         }
-

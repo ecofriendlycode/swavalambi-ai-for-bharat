@@ -219,7 +219,7 @@ async def register_user_endpoint(request: RegisterRequest):
             phone_number=request.phone_number if request.phone_number else None
         )
         
-        # Also create user record in DynamoDB
+        # Also create user record in DynamoDB (user_id = email)
         try:
             create_or_update_user(user_id=request.email, name=request.name)
         except Exception as e:

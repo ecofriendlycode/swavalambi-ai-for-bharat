@@ -13,12 +13,23 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const navigate = useNavigate();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const images = [heroBanner, carpentry, plumbing, tailor];
+
+  // Check for success message from navigation state
+  useEffect(() => {
+    const state = window.history.state?.usr;
+    if (state?.message) {
+      setSuccessMessage(state.message);
+      // Clear the message after 5 seconds
+      setTimeout(() => setSuccessMessage(""), 5000);
+    }
+  }, []);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -124,6 +135,12 @@ export default function Login() {
           Log in to continue your journey
         </p>
       </div>
+
+      {successMessage && (
+        <div className="mx-6 mb-2 bg-green-50 border border-green-200 text-green-700 text-sm p-3 rounded-xl">
+          {successMessage}
+        </div>
+      )}
 
       {error && (
         <div className="mx-6 mb-2 bg-red-50 border border-red-200 text-red-700 text-sm p-3 rounded-xl">
