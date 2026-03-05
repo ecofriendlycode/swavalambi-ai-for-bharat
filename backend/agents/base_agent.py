@@ -51,10 +51,14 @@ class BaseAgent:
         """Calculate eligibility score - override in subclass."""
         raise NotImplementedError
     
-    def search(self, user_profile: dict, limit: int = 10) -> list[dict]:
+    def search(self, user_profile: dict, limit: int = 10, query_embedding: list[float] = None) -> list[dict]:
         """Search using vector similarity and eligibility scoring."""
-        query_text = self._build_query_text(user_profile)
-        query_embedding = self.embedding_provider.generate_embedding(query_text)
+        if query_embedding is None:
+            logger.info(f"[{self.index_name}] Generating NEW embedding")
+            query_text = self._build_query_text(user_profile)
+            query_embedding = self.embedding_provider.generate_embedding(query_text)
+        else:
+            logger.info(f"[{self.index_name}] Using PRE-GENERATED embedding")
         
         results = self.vector_store.search(self.index_name, query_embedding, limit=50)
         

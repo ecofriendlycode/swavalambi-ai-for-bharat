@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-def search_schemes_tool(skill: str, intent: str, skill_level: int, state: str) -> List[Dict]:
+def search_schemes_tool(skill: str, intent: str, skill_level: int, state: str, query_embedding: List[float] = None) -> List[Dict]:
     """
     Search for government schemes based on user's skill, intent, and location.
     
@@ -16,6 +16,7 @@ def search_schemes_tool(skill: str, intent: str, skill_level: int, state: str) -
         intent: User's intent - 'job' (employment), 'upskill' (training), or 'loan' (financial assistance)
         skill_level: Skill proficiency level from 1-5
         state: User's state in India or 'All India'
+        query_embedding: Pre-generated embedding vector (optional, for performance)
     
     Returns:
         List of relevant schemes ranked by eligibility score
@@ -46,7 +47,7 @@ def search_schemes_tool(skill: str, intent: str, skill_level: int, state: str) -
         "state": state
     }
     
-    return agent.search_schemes(user_profile, limit=5)
+    return agent.search_schemes(user_profile, limit=5, query_embedding=query_embedding)
 
 SCHEME_TOOL_DEFINITION = {
     "name": "search_schemes",

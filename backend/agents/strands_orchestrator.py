@@ -3,14 +3,24 @@ strands_orchestrator.py — Simplified direct orchestrator
 Directly calls search tools without LLM overhead
 """
 import os
+import logging
 from typing import Dict, List, Any
 from dotenv import load_dotenv
 
 from agents.scheme.scheme_tool import search_schemes_tool
 from agents.jobs.jobs_tool import search_jobs_tool
 from agents.upskill.upskill_tool import search_upskill_tool
+from common.providers.embedding_providers import BedrockTitanEmbeddingProvider
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
+
+# Initialize embedding provider once for reuse
+_embedding_provider = BedrockTitanEmbeddingProvider(
+    region=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
+    model="amazon.titan-embed-text-v2:0"
+)
 
 
 def orchestrate(user_profile: Dict[str, Any] = None, task: str = None, context: Dict[str, Any] = None, max_iterations: int = 10) -> Dict[str, Any]:
@@ -46,12 +56,18 @@ def orchestrate(user_profile: Dict[str, Any] = None, task: str = None, context: 
     print(f"  Level: {skill_level}/5")
     print(f"  Location: {state}")
     
-    # Call all 3 search tools directly
+    # Generate embedding once for all agents (optimization)
+    print(f"\n🔄 Generating embedding...")
+    query_text = f"{skill} {intent} {state}"
+    query_embedding = _embedding_provider.generate_embedding(query_text)
+    print(f"✅ Embedding generated (1024 dimensions)")
+    
+    # Call all 3 search tools directly with pre-generated embedding
     print(f"\n🔍 Calling search tools...")
     
-    jobs = search_jobs_tool(skill, skill_level, state)[:5]  # Top 5
-    schemes = search_schemes_tool(skill, intent, skill_level, state)[:5]  # Top 5
-    training_centers = search_upskill_tool(skill, skill_level, state)[:5]  # Top 5
+    jobs = search_jobs_tool(skill, skill_level, state, query_embedding=query_embedding)[:5]
+    schemes = search_schemes_tool(skill, intent, skill_level, state, query_embedding=query_embedding)[:5]
+    training_centers = search_upskill_tool(skill, skill_level, state, query_embedding=query_embedding)[:5]
     
     print(f"\n✅ Results:")
     print(f"  Jobs: {len(jobs)}")

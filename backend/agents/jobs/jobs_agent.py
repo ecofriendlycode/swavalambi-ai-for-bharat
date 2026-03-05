@@ -38,8 +38,8 @@ class JobsAgent(BaseAgent):
         
         return min(score, 1.0)
     
-    def search_jobs(self, user_profile: dict, limit: int = 10) -> list[dict]:
-        results = self.search(user_profile, limit)
+    def search_jobs(self, user_profile: dict, limit: int = 10, query_embedding: list[float] = None) -> list[dict]:
+        results = self.search(user_profile, limit, query_embedding=query_embedding)
         
         # Format results for UI compatibility
         for job in results:

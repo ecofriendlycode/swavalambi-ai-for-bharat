@@ -48,8 +48,8 @@ class SchemeAgent(BaseAgent):
         
         return min(score, 1.0)
     
-    def search_schemes(self, user_profile: dict, limit: int = 10) -> list[dict]:
-        results = self.search(user_profile, limit)
+    def search_schemes(self, user_profile: dict, limit: int = 10, query_embedding: list[float] = None) -> list[dict]:
+        results = self.search(user_profile, limit, query_embedding=query_embedding)
         # Add full URL for each scheme
         for scheme in results:
             slug = scheme.get('url', '')
