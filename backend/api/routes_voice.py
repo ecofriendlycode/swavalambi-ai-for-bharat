@@ -252,6 +252,15 @@ async def voice_chat(
                         logger.info("Saved %d messages to DynamoDB for voice chat %s", len(serialized_chat), user_id)
             except Exception as e:
                 logger.warning("Failed to persist voice chat history to DynamoDB: %s", e)
+        
+        # Save profile assessment data if complete
+        if user_id and result.get("profile_data"):
+            try:
+                from services.dynamodb_service import save_profile_assessment
+                save_profile_assessment(user_id, result["profile_data"])
+                logger.info("Saved profile assessment for voice chat user %s", user_id)
+            except Exception as e:
+                logger.warning("Failed to save profile assessment: %s", e)
                 
         logger.info("Agent response: %s...", response_text[:50])
         

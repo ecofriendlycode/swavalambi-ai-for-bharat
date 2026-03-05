@@ -9,6 +9,9 @@ import {
   Mic,
   Send,
   SkipForward,
+  Play,
+  Square,
+  Loader2,
 } from "lucide-react";
 import BottomNav from "../components/BottomNav";
 
@@ -159,6 +162,55 @@ interface Message {
   imagePreviewUrl?: string;
 }
 
+// PlaybackButton Component
+interface PlaybackButtonProps {
+  messageId: string;
+  messageText: string;
+  isLoading: boolean;
+  isPlaying: boolean;
+  onPlay: () => void;
+  onStop: () => void;
+}
+
+const PlaybackButton: React.FC<PlaybackButtonProps> = ({
+  messageId,
+  messageText,
+  isLoading,
+  isPlaying,
+  onPlay,
+  onStop,
+}) => {
+  const handleClick = () => {
+    if (isPlaying) {
+      onStop();
+    } else {
+      onPlay();
+    }
+  };
+
+  return (
+    <button
+      onClick={handleClick}
+      disabled={isLoading}
+      className={`w-8 h-8 rounded-full flex items-center justify-center transition-all duration-150 ${
+        isPlaying
+          ? "bg-primary/20 border border-primary/30 animate-pulse"
+          : "bg-primary/10 border border-primary/20 hover:bg-primary/15 hover:scale-105"
+      } ${isLoading ? "opacity-50 cursor-not-allowed" : "cursor-pointer"}`}
+      aria-label={isPlaying ? "Stop audio" : "Play audio"}
+      title={isPlaying ? "Stop" : "Play"}
+    >
+      {isLoading ? (
+        <Loader2 size={14} className="text-primary animate-spin" />
+      ) : isPlaying ? (
+        <Square size={14} className="text-primary fill-current" />
+      ) : (
+        <Play size={14} className="text-primary fill-current" />
+      )}
+    </button>
+  );
+};
+
 export default function Assistant() {
   const navigate = useNavigate();
   const sessionId = getSessionId();
@@ -171,6 +223,20 @@ export default function Assistant() {
   const [selectedLanguage, setSelectedLanguage] = useState("hi-IN");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Playback state for voice playback controls
+  const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
+  const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
+  const [isLoadingAudio, setIsLoadingAudio] = useState<string | null>(null);
+
+  // Redirect countdown modal state
+  const [showRedirectModal, setShowRedirectModal] = useState(false);
+  const [redirectCountdown, setRedirectCountdown] = useState(5);
+  const [redirectPath, setRedirectPath] = useState("");
+  const redirectTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Clear chat confirmation modal state
+  const [showClearChatModal, setShowClearChatModal] = useState(false);
 
   // Load chat history on mount
   useEffect(() => {
@@ -237,6 +303,119 @@ export default function Assistant() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Cleanup audio on component unmount
+  useEffect(() => {
+    return () => {
+      if (currentAudio) {
+        currentAudio.pause();
+        currentAudio.currentTime = 0;
+      }
+    };
+  }, [currentAudio]);
+
+  // Playback functions
+  const playMessage = async (messageId: string, text: string) => {
+    // Stop any currently playing audio
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio.currentTime = 0;
+    }
+
+    setIsLoadingAudio(messageId);
+
+    try {
+      const response = await fetch(`${API_BASE}/voice/synthesize`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text,
+          language: selectedLanguage,
+        }),
+      });
+
+      if (!response.ok) throw new Error("TTS API failed");
+
+      const data = await response.json();
+      const audio = new Audio(
+        `data:audio/${data.audio_format};base64,${data.audio_base64}`
+      );
+
+      audio.onended = () => {
+        setPlayingMessageId(null);
+        setCurrentAudio(null);
+      };
+
+      audio.onerror = () => {
+        console.error("Audio playback failed");
+        setPlayingMessageId(null);
+        setCurrentAudio(null);
+        setIsLoadingAudio(null);
+      };
+
+      await audio.play();
+      setCurrentAudio(audio);
+      setPlayingMessageId(messageId);
+    } catch (error) {
+      console.error("TTS error:", error);
+      alert("Unable to play audio. Please try again.");
+    } finally {
+      setIsLoadingAudio(null);
+    }
+  };
+
+  const stopMessage = () => {
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio.currentTime = 0;
+      setCurrentAudio(null);
+    }
+    setPlayingMessageId(null);
+  };
+
+  // Start redirect countdown
+  const startRedirectCountdown = (path: string) => {
+    setRedirectPath(path);
+    setRedirectCountdown(5);
+    setShowRedirectModal(true);
+
+    // Clear any existing timer
+    if (redirectTimerRef.current) {
+      clearInterval(redirectTimerRef.current);
+    }
+
+    // Start countdown
+    let count = 5;
+    redirectTimerRef.current = setInterval(() => {
+      count--;
+      setRedirectCountdown(count);
+      
+      if (count <= 0) {
+        if (redirectTimerRef.current) {
+          clearInterval(redirectTimerRef.current);
+        }
+        navigate(path);
+      }
+    }, 1000);
+  };
+
+  // Cancel redirect
+  const cancelRedirect = () => {
+    if (redirectTimerRef.current) {
+      clearInterval(redirectTimerRef.current);
+      redirectTimerRef.current = null;
+    }
+    setShowRedirectModal(false);
+  };
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (redirectTimerRef.current) {
+        clearInterval(redirectTimerRef.current);
+      }
+    };
+  }, []);
+
   // Detect intent from user message immediately (don't wait for backend final JSON)
   const detectAndCacheIntent = (msg: string) => {
     const lower = msg.toLowerCase();
@@ -246,6 +425,38 @@ export default function Assistant() {
       localStorage.setItem("swavalambi_intent", "upskill");
     } else if (lower.includes("job") || lower.includes("employment") || lower.includes("work")) {
       localStorage.setItem("swavalambi_intent", "job");
+    }
+  };
+
+  const handleClearChat = async () => {
+    try {
+      const userId = localStorage.getItem("swavalambi_user_id");
+      
+      // Clear chat history in backend if user is logged in
+      if (userId) {
+        await fetch(`${API_BASE}/users/${userId}/chat-history`, {
+          method: "DELETE",
+        });
+      }
+      
+      // Clear local messages
+      const storedName = localStorage.getItem("swavalambi_name") || "";
+      const userName = storedName && !/^\+?\d{7,}$/.test(storedName.trim()) ? storedName : "";
+      const welcomeMessage = userName
+        ? `Namaste, ${userName}! 😊 I'm your Swavalambi Assistant. Let's build your profile. What kind of work do you do? (e.g., **Tailoring**, **Plumbing**, **Teaching**)`
+        : `Namaste! I am your Swavalambi assistant. Let's build your profile. Tell me, what kind of work do you do? (e.g., **Tailoring**, **Plumbing**, **Teaching**)`;
+      
+      setMessages([{ id: "msg-1", role: "assistant", content: welcomeMessage }]);
+      
+      // Clear session to start fresh
+      clearSession();
+      
+      // Close modal
+      setShowClearChatModal(false);
+      
+    } catch (error) {
+      console.error("Failed to clear chat history:", error);
+      alert("Failed to clear chat history. Please try again.");
     }
   };
 
@@ -309,10 +520,10 @@ export default function Assistant() {
         localStorage.setItem("swavalambi_location", data.location_extracted);
       }
       if (data.is_complete) {
-        // Redirect based on user's intent
+        // Start redirect countdown instead of immediate redirect
         const userIntent = data.intent_extracted || localStorage.getItem("swavalambi_intent");
-        const redirectPath = userIntent === "upskill" ? "/upskill" : userIntent === "job" ? "/jobs" : "/home";
-        setTimeout(() => navigate(redirectPath), 6000);
+        const path = userIntent === "upskill" ? "/upskill" : userIntent === "job" ? "/jobs" : "/home";
+        startRedirectCountdown(path);
       }
     } catch (e) {
       console.error(e);
@@ -387,10 +598,10 @@ export default function Assistant() {
         },
       ]);
 
-      // Redirect based on user's intent
+      // Start redirect countdown instead of immediate redirect
       const userIntent = localStorage.getItem("swavalambi_intent");
-      const redirectPath = userIntent === "upskill" ? "/upskill" : userIntent === "job" ? "/jobs" : "/home";
-      setTimeout(() => navigate(redirectPath), 8000);
+      const path = userIntent === "upskill" ? "/upskill" : userIntent === "job" ? "/jobs" : "/home";
+      startRedirectCountdown(path);
     } catch (e) {
 
       console.error(e);
@@ -479,19 +690,20 @@ export default function Assistant() {
       ]);
 
       // Add assistant response
+      const assistantMessageId = (Date.now() + 1).toString();
       setMessages((prev) => [
         ...prev,
         {
-          id: (Date.now() + 1).toString(),
+          id: assistantMessageId,
           role: "assistant",
           content: data.localized_response,
           isReadyForPhoto: data.is_ready_for_photo,
         },
       ]);
 
-      // Play audio response
+      // Play audio response with message ID for playback button sync
       if (data.audio_base64) {
-        playAudio(data.audio_base64, data.audio_format);
+        playAudio(data.audio_base64, data.audio_format, assistantMessageId);
       }
 
       // Cache extracted data
@@ -509,10 +721,10 @@ export default function Assistant() {
       }
       
       if (data.is_complete) {
-        // Redirect based on user's intent
+        // Start redirect countdown instead of immediate redirect
         const userIntent = data.intent_extracted || localStorage.getItem("swavalambi_intent");
-        const redirectPath = userIntent === "upskill" ? "/upskill" : userIntent === "job" ? "/jobs" : "/home";
-        setTimeout(() => navigate(redirectPath), 6000);
+        const path = userIntent === "upskill" ? "/upskill" : userIntent === "job" ? "/jobs" : "/home";
+        startRedirectCountdown(path);
       }
     } catch (error) {
       console.error("Voice chat error:", error);
@@ -529,9 +741,38 @@ export default function Assistant() {
     }
   };
 
-  const playAudio = (base64Audio: string, format: string) => {
+  const playAudio = (base64Audio: string, format: string, messageId?: string) => {
+    // Stop any currently playing audio
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio.currentTime = 0;
+    }
+
     const audio = new Audio(`data:audio/${format};base64,${base64Audio}`);
-    audio.play().catch(err => console.error("Audio playback failed:", err));
+    
+    // Set up event handlers
+    audio.onended = () => {
+      setPlayingMessageId(null);
+      setCurrentAudio(null);
+    };
+    
+    audio.onerror = () => {
+      console.error("Audio playback failed");
+      setPlayingMessageId(null);
+      setCurrentAudio(null);
+    };
+    
+    // Play and update state
+    audio.play().catch(err => {
+      console.error("Audio playback failed:", err);
+      setPlayingMessageId(null);
+      setCurrentAudio(null);
+    });
+    
+    setCurrentAudio(audio);
+    if (messageId) {
+      setPlayingMessageId(messageId);
+    }
   };
 
   return (
@@ -553,7 +794,11 @@ export default function Assistant() {
               </span>
             </div>
           </div>
-          <button className="p-2 hover:bg-primary/10 rounded-full transition-colors">
+          <button 
+            onClick={() => setShowClearChatModal(true)}
+            className="p-2 hover:bg-primary/10 rounded-full transition-colors"
+            title="Clear chat history"
+          >
             <History className="text-slate-700" />
           </button>
         </div>
@@ -590,7 +835,7 @@ export default function Assistant() {
             )}
 
             <div
-              className={`flex flex-col gap-1 max-w-[80%] ${msg.role === "user" ? "items-end" : ""}`}
+              className={`flex flex-col gap-1 ${msg.role === "user" ? "items-end max-w-[80%]" : "flex-1"}`}
             >
               <p
                 className={`text-[11px] font-semibold uppercase ${msg.role === "user" ? "text-slate-400 mr-1" : "text-primary ml-1"}`}
@@ -598,63 +843,79 @@ export default function Assistant() {
                 {msg.role === "user" ? "You" : "Assistant"}
               </p>
 
-              <div
-                className={`p-4 rounded-xl shadow-sm border ${
-                  msg.role === "user"
-                    ? "bg-primary text-white rounded-tr-none border-primary"
-                    : "bg-white text-slate-900 rounded-tl-none border-slate-100"
-                }`}
-              >
-                {msg.imagePreviewUrl && (
-                  <div className="relative mb-2">
-                    <img
-                      src={msg.imagePreviewUrl}
-                      alt="Upload preview"
-                      className="rounded-lg max-w-full h-40 object-cover"
+              <div className={`flex items-end gap-2 ${msg.role === "user" ? "flex-row-reverse" : ""}`}>
+                <div
+                  className={`p-4 rounded-xl shadow-sm border ${
+                    msg.role === "user"
+                      ? "bg-primary text-white rounded-tr-none border-primary"
+                      : "bg-white text-slate-900 rounded-tl-none border-slate-100"
+                  } ${msg.role === "assistant" ? "max-w-[calc(100%-3rem)]" : ""}`}
+                >
+                  {msg.imagePreviewUrl && (
+                    <div className="relative mb-2">
+                      <img
+                        src={msg.imagePreviewUrl}
+                        alt="Upload preview"
+                        className="rounded-lg max-w-full h-40 object-cover"
+                      />
+                    </div>
+                  )}
+
+                  {/* Render markdown for assistant, plain text for user */}
+                  {msg.role === "assistant" ? (
+                    <div className="space-y-0.5">
+                      {renderMarkdown(msg.content)}
+                    </div>
+                  ) : (
+                    <p className="text-sm leading-relaxed whitespace-pre-wrap">
+                      {msg.content}
+                    </p>
+                  )}
+
+                  {/* Clickable option chips */}
+                  {msg.role === "assistant" &&
+                    (() => {
+                      const opts = extractOptions(msg.content);
+                      return opts.length > 0 ? (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {opts.map((opt, i) => (
+                            <button
+                              key={i}
+                              onClick={() => {
+                                setInput(opt);
+                              }}
+                              className="text-xs font-semibold px-3 py-1.5 bg-primary/10 text-primary border border-primary/25 rounded-full hover:bg-primary hover:text-white active:scale-95 transition-all duration-150"
+                            >
+                              {opt}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null;
+                    })()}
+
+                  {msg.isReadyForPhoto && (
+                    <div className="mt-3">
+                      <button
+                        onClick={() => fileInputRef.current?.click()}
+                        className="flex items-center gap-2 px-4 py-2 bg-primary/10 text-primary border border-primary/20 rounded-lg text-sm font-semibold hover:bg-primary/20 transition-colors w-full justify-center"
+                      >
+                        <ImageIcon size={16} /> Upload Work Sample
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Playback Button - Outside message bubble, only for assistant messages */}
+                {msg.role === "assistant" && (
+                  <div className="flex-shrink-0 mb-1">
+                    <PlaybackButton
+                      messageId={msg.id}
+                      messageText={msg.content}
+                      isLoading={isLoadingAudio === msg.id}
+                      isPlaying={playingMessageId === msg.id}
+                      onPlay={() => playMessage(msg.id, msg.content)}
+                      onStop={stopMessage}
                     />
-                  </div>
-                )}
-
-                {/* Render markdown for assistant, plain text for user */}
-                {msg.role === "assistant" ? (
-                  <div className="space-y-0.5">
-                    {renderMarkdown(msg.content)}
-                  </div>
-                ) : (
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap">
-                    {msg.content}
-                  </p>
-                )}
-
-                {/* Clickable option chips */}
-                {msg.role === "assistant" &&
-                  (() => {
-                    const opts = extractOptions(msg.content);
-                    return opts.length > 0 ? (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {opts.map((opt, i) => (
-                          <button
-                            key={i}
-                            onClick={() => {
-                              setInput(opt);
-                            }}
-                            className="text-xs font-semibold px-3 py-1.5 bg-primary/10 text-primary border border-primary/25 rounded-full hover:bg-primary hover:text-white active:scale-95 transition-all duration-150"
-                          >
-                            {opt}
-                          </button>
-                        ))}
-                      </div>
-                    ) : null;
-                  })()}
-
-                {msg.isReadyForPhoto && (
-                  <div className="mt-3">
-                    <button
-                      onClick={() => fileInputRef.current?.click()}
-                      className="flex items-center gap-2 px-4 py-2 bg-primary/10 text-primary border border-primary/20 rounded-lg text-sm font-semibold hover:bg-primary/20 transition-colors w-full justify-center"
-                    >
-                      <ImageIcon size={16} /> Upload Work Sample
-                    </button>
                   </div>
                 )}
               </div>
@@ -790,6 +1051,77 @@ export default function Assistant() {
           </div>
         </div>
       </div>
+
+      {/* Redirect Countdown Modal */}
+      {showRedirectModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+            <div className="text-center">
+              <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center mx-auto mb-4">
+                <span className="text-3xl font-bold text-primary">{redirectCountdown}</span>
+              </div>
+              <h3 className="text-lg font-bold text-slate-800 mb-2">
+                Redirecting to {redirectPath === "/jobs" ? "Jobs" : redirectPath === "/upskill" ? "Upskill" : "Schemes"}
+              </h3>
+              <p className="text-sm text-slate-600 mb-6">
+                Taking you to your personalized dashboard in {redirectCountdown} seconds...
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={cancelRedirect}
+                  className="flex-1 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg font-semibold hover:bg-slate-200 transition-colors"
+                >
+                  Stay Here
+                </button>
+                <button
+                  onClick={() => {
+                    if (redirectTimerRef.current) {
+                      clearInterval(redirectTimerRef.current);
+                    }
+                    navigate(redirectPath);
+                  }}
+                  className="flex-1 px-4 py-2 bg-primary text-white rounded-lg font-semibold hover:bg-primary/90 transition-colors"
+                >
+                  Go Now
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Clear Chat Confirmation Modal */}
+      {showClearChatModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+            <div className="text-center">
+              <div className="w-16 h-16 bg-red-50 rounded-full flex items-center justify-center mx-auto mb-4">
+                <History className="w-8 h-8 text-red-500" />
+              </div>
+              <h3 className="text-lg font-bold text-slate-800 mb-2">
+                Clear Chat History?
+              </h3>
+              <p className="text-sm text-slate-600 mb-6">
+                This will delete all messages and start a fresh conversation. Your profile data will be preserved.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowClearChatModal(false)}
+                  className="flex-1 px-4 py-2 bg-slate-100 text-slate-700 rounded-lg font-semibold hover:bg-slate-200 transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleClearChat}
+                  className="flex-1 px-4 py-2 bg-red-500 text-white rounded-lg font-semibold hover:bg-red-600 transition-colors"
+                >
+                  Clear Chat
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <BottomNav />
     </div>

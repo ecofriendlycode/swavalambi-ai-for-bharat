@@ -41,14 +41,13 @@ class S3Service:
             extension = self._get_extension(final_content_type)
             filename = f"profiles/{user_id}_{timestamp}.{extension}"
             
-            # Upload to S3 with public-read ACL
+            # Upload to S3 (public access controlled by bucket policy)
             self.s3_client.put_object(
                 Bucket=self.bucket_name,
                 Key=filename,
                 Body=optimized_image,
                 ContentType=final_content_type,
-                CacheControl='max-age=31536000',  # 1 year cache
-                ACL='public-read'  # Make object publicly readable
+                CacheControl='max-age=31536000'  # 1 year cache
             )
             
             # Generate public URL
@@ -165,20 +164,20 @@ class S3Service:
                 raise
     
     def _disable_block_public_access(self):
-        """Disable block public access settings on the bucket."""
+        """Disable block public access settings on the bucket (for bucket policy access)."""
         try:
             self.s3_client.put_public_access_block(
                 Bucket=self.bucket_name,
                 PublicAccessBlockConfiguration={
-                    'BlockPublicAcls': False,
-                    'IgnorePublicAcls': False,
-                    'BlockPublicPolicy': False,
-                    'RestrictPublicBuckets': False
+                    'BlockPublicAcls': True,  # Keep ACLs blocked (we use bucket policy)
+                    'IgnorePublicAcls': True,  # Ignore ACLs (we use bucket policy)
+                    'BlockPublicPolicy': False,  # Allow public bucket policy
+                    'RestrictPublicBuckets': False  # Allow public bucket policy
                 }
             )
-            logger.info(f"Disabled block public access for bucket {self.bucket_name}")
+            logger.info(f"Configured public access settings for bucket {self.bucket_name}")
         except Exception as e:
-            logger.error(f"Error disabling block public access: {e}")
+            logger.error(f"Error configuring public access: {e}")
             raise
     
     def _set_public_read_policy(self):

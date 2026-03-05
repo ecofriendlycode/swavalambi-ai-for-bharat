@@ -118,6 +118,17 @@ async def chat_profile(request: ChatRequest):
                 print(f"[WARN] Failed to persist chat history to DynamoDB: {e}")
                 import traceback
                 traceback.print_exc()
+        
+        # Save profile assessment data if complete
+        if request.user_id and result.get("profile_data"):
+            try:
+                from services.dynamodb_service import save_profile_assessment
+                save_profile_assessment(request.user_id, result["profile_data"])
+                print(f"[INFO] Saved profile assessment for user {request.user_id}")
+            except Exception as e:
+                print(f"[WARN] Failed to save profile assessment: {e}")
+                import traceback
+                traceback.print_exc()
                 
         # Return response - ensure all values are JSON-serializable
         # Create a clean response object with explicit type conversion

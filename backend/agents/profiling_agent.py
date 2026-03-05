@@ -8,14 +8,23 @@ class ProfilingAgent:
     def __init__(self, session_id: str, user_name: str = ""):
         self.session_id = session_id
         
+        # Build a boto3 session for Bedrock models
+        self.boto3_session = boto3.Session(
+            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+            aws_session_token=os.getenv("AWS_SESSION_TOKEN"),
+            region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
+        )
+        
         # Check if we should use the direct Anthropic API or AWS Bedrock
         self.use_anthropic = os.getenv("USE_ANTHROPIC", "false").lower() == "true"
         
+        # Initialize primary model (Claude)
         if self.use_anthropic:
             model_id = os.getenv("ANTHROPIC_MODEL_ID", "claude-3-5-sonnet-latest")
             api_key = os.getenv("ANTHROPIC_API_KEY")
             
-            self.model = AnthropicModel(
+            self.primary_model = AnthropicModel(
                 model_id=model_id,
                 max_tokens=1000,
                 params={"temperature": 0.7},
@@ -23,21 +32,20 @@ class ProfilingAgent:
             )
         else:
             model_id = os.getenv("BEDROCK_MODEL_ID", "global.anthropic.claude-sonnet-4-5-20250929-v1:0")
-
-            # Build a boto3 session with explicit credentials so that temporary
-            # credentials (AWS_SESSION_TOKEN) from .env are always honoured.
-            boto3_session = boto3.Session(
-                aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-                aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-                aws_session_token=os.getenv("AWS_SESSION_TOKEN"),
-                region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
-            )
             
-            self.model = BedrockModel(
+            self.primary_model = BedrockModel(
                 model_id=model_id,
                 temperature=0.7,
-                boto_session=boto3_session,
+                boto_session=self.boto3_session,
             )
+        
+        # Initialize fallback model (Amazon Nova)
+        fallback_model_id = os.getenv("FALLBACK_MODEL_ID", "us.amazon.nova-lite-v1:0")
+        self.fallback_model = BedrockModel(
+            model_id=fallback_model_id,
+            temperature=0.7,
+            boto_session=self.boto3_session,
+        )
 
         # Build user-context preamble if name is known
         if user_name and not user_name.isdigit() and len(user_name.strip()) > 1:
@@ -131,20 +139,58 @@ class ProfilingAgent:
         - preferred_location: city or state name if intent=job, empty string "" if intent=upskill/loan or if user said "any/anywhere"
         """
 
-        # Initialize the Strands Agent with the conditionally created model
+        # Initialize the Strands Agent with the primary model (Claude)
         self.agent = Agent(
             system_prompt=self.system_prompt,
-            model=self.model,
+            model=self.primary_model,
+        )
+        
+        # Initialize fallback agent with Nova model
+        self.fallback_agent = Agent(
+            system_prompt=self.system_prompt,
+            model=self.fallback_model,
         )
 
     def run(self, user_message: str) -> dict:
         """
         Runs the conversational agent with the user's latest message.
         Uses the correct Strands API: agent(prompt) returns a response object.
+        Automatically falls back to Amazon Nova if Claude fails.
         """
-        # Call agent as a callable — this is the correct Strands pattern
-        response = self.agent(user_message)
-        response_text = str(response)
+        response_text = None
+        used_fallback = False
+        
+        # Try primary model (Claude) first
+        try:
+            print(f"[INFO] Attempting with primary model (Claude)...")
+            response = self.agent(user_message)
+            response_text = str(response)
+            print(f"[INFO] Primary model succeeded")
+        except Exception as e:
+            print(f"[WARN] Primary model (Claude) failed: {e}")
+            print(f"[INFO] Falling back to Amazon Nova...")
+            
+            # Fallback to Nova model
+            try:
+                # Sync conversation history from primary to fallback agent
+                if hasattr(self.agent, "messages") and self.agent.messages:
+                    self.fallback_agent.messages = self.agent.messages.copy()
+                
+                response = self.fallback_agent(user_message)
+                response_text = str(response)
+                used_fallback = True
+                print(f"[INFO] Fallback model (Nova) succeeded")
+                
+                # Sync back to primary agent for next turn
+                if hasattr(self.fallback_agent, "messages"):
+                    self.agent.messages = self.fallback_agent.messages.copy()
+                    
+            except Exception as fallback_error:
+                print(f"[ERROR] Fallback model (Nova) also failed: {fallback_error}")
+                raise Exception(f"Both primary and fallback models failed. Primary: {e}, Fallback: {fallback_error}")
+        
+        if not response_text:
+            raise Exception("No response generated from any model")
 
         # Check if the LLM outputted the final JSON profile
         if "{" in response_text and "}" in response_text and "is_ready_for_photo" in response_text:
@@ -154,12 +200,13 @@ class ProfilingAgent:
                 
                 is_ready = profile.get("is_ready_for_photo", False)
                 
+                # Don't show the JSON to the user - provide a clean message instead
                 final_response = "Thank you! Please upload your work sample now using the button below." 
                 if not is_ready:
                     final_response = "Thank you! Your profile information has been successfully saved. We look forward to helping you grow!"
                     
                 return {
-                    "response": final_response,
+                    "response": final_response,  # Clean message, not JSON
                     "is_ready_for_photo": is_ready,
                     "is_complete": not is_ready, # If not ready for photo (e.g. beginner), we just mark it complete
                     "intent_extracted": profile.get("intent"),
@@ -167,6 +214,7 @@ class ProfilingAgent:
                     "theory_score_extracted": profile.get("theory_score"),
                     "gender_extracted": profile.get("gender"),
                     "location_extracted": profile.get("preferred_location") or None,
+                    "profile_data": profile,  # Pass the complete profile for storage
                 }
             except Exception as e:
                 print(f"Failed to parse profile JSON: {e}")
@@ -181,5 +229,6 @@ class ProfilingAgent:
             "theory_score_extracted": None,
             "gender_extracted": None,
             "location_extracted": None,
+            "profile_data": None,
         }
 

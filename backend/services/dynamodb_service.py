@@ -88,6 +88,53 @@ def save_assessment(
     logger.info(f"Saved assessment for {user_id}: skill={skill}, rating={skill_rating}")
 
 
+def save_profile_assessment(
+    user_id: str,
+    profile_data: dict
+) -> None:
+    """
+    Save the complete profile assessment data from the profiling agent.
+    Stores the structured assessment separately from chat history.
+    
+    Args:
+        user_id: User's phone number
+        profile_data: Dictionary containing:
+            - profession_skill: str
+            - intent: str (job/upskill/loan)
+            - theory_score: int (1-5)
+            - years_experience: int
+            - work_type: str
+            - has_training: bool
+            - gender: str
+            - preferred_location: str
+    """
+    table = _get_table()
+    now = datetime.now(timezone.utc).isoformat()
+
+    table.update_item(
+        Key={"user_id": user_id},
+        UpdateExpression=(
+            "SET profile_assessment = :profile, "
+            "skill = :skill, "
+            "intent = :intent, "
+            "theory_score = :theory, "
+            "gender = :gender, "
+            "preferred_location = :location, "
+            "updated_at = :now"
+        ),
+        ExpressionAttributeValues={
+            ":profile": profile_data,
+            ":skill": profile_data.get("profession_skill", ""),
+            ":intent": profile_data.get("intent", "job"),
+            ":theory": profile_data.get("theory_score", 0),
+            ":gender": profile_data.get("gender", ""),
+            ":location": profile_data.get("preferred_location", ""),
+            ":now": now,
+        }
+    )
+    logger.info(f"Saved profile assessment for {user_id}: {profile_data.get('profession_skill')}, theory={profile_data.get('theory_score')}")
+
+
 def get_user(user_id: str) -> Optional[dict]:
     """
     Fetch a user record by user_id (phone number).
@@ -152,7 +199,7 @@ def clear_chat_history(user_id: str) -> None:
 def reset_assessment(user_id: str) -> None:
     """
     Completely resets a user's assessment data for retaking the assessment.
-    Clears: skill, skill_rating, theory_score, intent, chat_history, session_id
+    Clears: skill, skill_rating, theory_score, intent, chat_history, session_id, profile_assessment
     Keeps: name, created_at, profile_picture, vision_upload_history
     """
     table = _get_table()
@@ -167,7 +214,7 @@ def reset_assessment(user_id: str) -> None:
             "intent = :default_intent, "
             "chat_history = :empty_list, "
             "updated_at = :now "
-            "REMOVE session_id"
+            "REMOVE session_id, profile_assessment, gender, preferred_location"
         ),
         ExpressionAttributeValues={
             ":empty_str": "",
