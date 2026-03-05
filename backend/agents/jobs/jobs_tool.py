@@ -20,14 +20,12 @@ def search_jobs_tool(skill: str, skill_level: int, state: str) -> List[Dict]:
         List of relevant jobs ranked by match score
     """
     from agents.jobs.jobs_agent import JobsAgent
-    from common.providers.embedding_providers import AzureOpenAIEmbeddingProvider
+    from common.providers.embedding_providers import BedrockTitanEmbeddingProvider
     from common.stores.vector_stores import PostgresPgVectorStore
     
-    embedding_provider = AzureOpenAIEmbeddingProvider(
-        api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-        endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-        deployment_name=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
-        api_version=os.getenv("AZURE_OPENAI_API_VERSION")
+    embedding_provider = BedrockTitanEmbeddingProvider(
+        region=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
+        model="amazon.titan-embed-text-v2:0"
     )
     
     vector_store = PostgresPgVectorStore(

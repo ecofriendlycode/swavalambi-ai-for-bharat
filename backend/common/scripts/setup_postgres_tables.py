@@ -35,9 +35,15 @@ def setup_postgres_tables():
         cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
         logger.info("✅ Created pgvector extension")
         
+        # Drop existing tables if they exist
+        cur.execute("DROP TABLE IF EXISTS schemes CASCADE")
+        cur.execute("DROP TABLE IF EXISTS jobs CASCADE")
+        cur.execute("DROP TABLE IF EXISTS upskill CASCADE")
+        logger.info("✅ Dropped existing tables (if any)")
+        
         # 1. Create schemes table
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS schemes (
+            CREATE TABLE schemes (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 ministry TEXT,
@@ -47,7 +53,7 @@ def setup_postgres_tables():
                 state TEXT,
                 level TEXT,
                 url TEXT,
-                embedding vector(1536),
+                embedding vector(1024),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -55,7 +61,7 @@ def setup_postgres_tables():
         
         # 2. Create jobs table
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS jobs (
+            CREATE TABLE jobs (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
                 description TEXT,
@@ -67,7 +73,7 @@ def setup_postgres_tables():
                 min_salary NUMERIC,
                 max_salary NUMERIC,
                 experience TEXT,
-                embedding vector(1536),
+                embedding vector(1024),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -75,7 +81,7 @@ def setup_postgres_tables():
         
         # 3. Create upskill table
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS upskill (
+            CREATE TABLE upskill (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
                 description TEXT,
@@ -85,7 +91,7 @@ def setup_postgres_tables():
                 address TEXT,
                 contact TEXT,
                 email TEXT,
-                embedding vector(1536),
+                embedding vector(1024),
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
@@ -93,29 +99,29 @@ def setup_postgres_tables():
         
         # Create vector indexes for fast similarity search
         cur.execute("""
-            CREATE INDEX IF NOT EXISTS schemes_embedding_idx 
+            CREATE INDEX schemes_embedding_idx 
             ON schemes USING ivfflat (embedding vector_cosine_ops)
             WITH (lists = 100)
         """)
         cur.execute("""
-            CREATE INDEX IF NOT EXISTS jobs_embedding_idx 
+            CREATE INDEX jobs_embedding_idx 
             ON jobs USING ivfflat (embedding vector_cosine_ops)
             WITH (lists = 100)
         """)
         cur.execute("""
-            CREATE INDEX IF NOT EXISTS upskill_embedding_idx 
+            CREATE INDEX upskill_embedding_idx 
             ON upskill USING ivfflat (embedding vector_cosine_ops)
             WITH (lists = 100)
         """)
         logger.info("✅ Created vector indexes")
         
         # Create additional indexes
-        cur.execute("CREATE INDEX IF NOT EXISTS schemes_state_idx ON schemes(state)")
-        cur.execute("CREATE INDEX IF NOT EXISTS schemes_tags_idx ON schemes USING GIN(tags)")
-        cur.execute("CREATE INDEX IF NOT EXISTS jobs_location_idx ON jobs(location)")
-        cur.execute("CREATE INDEX IF NOT EXISTS jobs_skills_idx ON jobs USING GIN(skills)")
-        cur.execute("CREATE INDEX IF NOT EXISTS upskill_location_idx ON upskill(location)")
-        cur.execute("CREATE INDEX IF NOT EXISTS upskill_skills_idx ON upskill USING GIN(skills)")
+        cur.execute("CREATE INDEX schemes_state_idx ON schemes(state)")
+        cur.execute("CREATE INDEX schemes_tags_idx ON schemes USING GIN(tags)")
+        cur.execute("CREATE INDEX jobs_location_idx ON jobs(location)")
+        cur.execute("CREATE INDEX jobs_skills_idx ON jobs USING GIN(skills)")
+        cur.execute("CREATE INDEX upskill_location_idx ON upskill(location)")
+        cur.execute("CREATE INDEX upskill_skills_idx ON upskill USING GIN(skills)")
         logger.info("✅ Created additional indexes")
         
         conn.commit()
@@ -126,7 +132,7 @@ def setup_postgres_tables():
         logger.info("✅ PostgreSQL setup complete!")
         logger.info("="*80)
         logger.info("Created tables: schemes, jobs, upskill")
-        logger.info("All tables have vector embeddings (1536 dimensions)")
+        logger.info("All tables have vector embeddings (1024 dimensions)")
         logger.info("="*80)
         
     except Exception as e:

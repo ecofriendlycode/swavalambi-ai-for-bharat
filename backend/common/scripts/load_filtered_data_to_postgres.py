@@ -14,15 +14,13 @@ load_dotenv()
 # Add parent directory to path for imports
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from common.providers.embedding_providers import AzureOpenAIEmbeddingProvider
+from common.providers.embedding_providers import BedrockTitanEmbeddingProvider
 
 # Config
 PG_CONN = os.getenv("POSTGRES_CONNECTION_STRING")
-embedding_provider = AzureOpenAIEmbeddingProvider(
-    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-    endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
-    deployment_name=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
-    api_version=os.getenv("AZURE_OPENAI_API_VERSION")
+embedding_provider = BedrockTitanEmbeddingProvider(
+    region=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
+    model="amazon.titan-embed-text-v2:0"
 )
 
 def load_schemes(csv_file, conn):
