@@ -30,6 +30,7 @@ export default function Profile() {
   const [intent, setIntent] = useState('job');
   const [profilePicture, setProfilePicture] = useState<string | null>(null);
   const [showReassessmentWarning, setShowReassessmentWarning] = useState(false);
+  const [isReassessing, setIsReassessing] = useState(false);
   const [showDeleteAccountWarning, setShowDeleteAccountWarning] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -90,6 +91,8 @@ export default function Profile() {
   };
 
   const handleReassessment = async () => {
+    setIsReassessing(true);
+    
     // Get user ID
     const userId = localStorage.getItem("swavalambi_user_id");
     
@@ -117,8 +120,14 @@ export default function Profile() {
     localStorage.removeItem("swavalambi_skill");
     localStorage.removeItem("swavalambi_theory_score");
     
+    // Clear language preference to allow user to choose again
+    localStorage.removeItem("swavalambi_language");
+    
     // Add flag to indicate this is a reassessment
     sessionStorage.setItem("is_reassessment", "true");
+    
+    // Small delay to show loading state
+    await new Promise(resolve => setTimeout(resolve, 500));
     
     // Force full page reload to ensure clean state
     window.location.href = "/assistant?reassess=true";
@@ -459,47 +468,62 @@ export default function Profile() {
       {showReassessmentWarning && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl">
-            <div className="flex items-center justify-center w-16 h-16 bg-amber-100 rounded-full mx-auto mb-4">
-              <span className="text-3xl">⚠️</span>
-            </div>
-            
-            <h3 className="text-xl font-bold text-center text-gray-800 mb-2">
-              Retake Assessment?
-            </h3>
-            
-            <p className="text-sm text-gray-600 text-center mb-4 leading-relaxed">
-              Taking a new assessment will reset your current profile. All verification done for <span className="font-semibold text-primary">{skill || 'your profession'}</span> will be deleted and a fresh profile will be created.
-            </p>
-            
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-6">
-              <p className="text-xs text-amber-800 font-medium">
-                ⚠️ This action will:
-              </p>
-              <ul className="text-xs text-amber-700 mt-2 space-y-1 ml-4">
-                <li>• Reset your skill level to 0</li>
-                <li>• Clear your assessment history</li>
-                <li>• Remove your current profession verification</li>
-                <li>• Start a completely new assessment</li>
-              </ul>
-            </div>
-            
-            <div className="flex gap-3">
-              <button
-                onClick={() => setShowReassessmentWarning(false)}
-                className="flex-1 px-4 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl transition-colors text-sm"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  setShowReassessmentWarning(false);
-                  handleReassessment();
-                }}
-                className="flex-1 px-4 py-3 bg-primary hover:bg-primary-dark text-white font-semibold rounded-xl transition-colors text-sm"
-              >
-                Continue
-              </button>
-            </div>
+            {isReassessing ? (
+              // Loading state
+              <div className="text-center py-8">
+                <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-primary border-t-transparent mb-4"></div>
+                <h3 className="text-lg font-semibold text-gray-800 mb-2">
+                  Resetting Assessment...
+                </h3>
+                <p className="text-sm text-gray-600">
+                  Clearing your profile and chat history
+                </p>
+              </div>
+            ) : (
+              // Warning content
+              <>
+                <div className="flex items-center justify-center w-16 h-16 bg-amber-100 rounded-full mx-auto mb-4">
+                  <span className="text-3xl">⚠️</span>
+                </div>
+                
+                <h3 className="text-xl font-bold text-center text-gray-800 mb-2">
+                  Retake Assessment?
+                </h3>
+                
+                <p className="text-sm text-gray-600 text-center mb-4 leading-relaxed">
+                  Taking a new assessment will reset your current profile. All verification done for <span className="font-semibold text-primary">{skill || 'your profession'}</span> will be deleted and a fresh profile will be created.
+                </p>
+                
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-6">
+                  <p className="text-xs text-amber-800 font-medium">
+                    ⚠️ This action will:
+                  </p>
+                  <ul className="text-xs text-amber-700 mt-2 space-y-1 ml-4">
+                    <li>• Reset your skill level to 0</li>
+                    <li>• Clear your assessment history</li>
+                    <li>• Remove your current profession verification</li>
+                    <li>• Start a completely new assessment</li>
+                  </ul>
+                </div>
+                
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setShowReassessmentWarning(false)}
+                    className="flex-1 px-4 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl transition-colors text-sm"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      handleReassessment();
+                    }}
+                    className="flex-1 px-4 py-3 bg-primary hover:bg-primary-dark text-white font-semibold rounded-xl transition-colors text-sm"
+                  >
+                    Continue
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

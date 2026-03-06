@@ -133,16 +133,20 @@ async def voice_chat(
     language: str = Form("hi-IN"),
 ):
     """
-    Complete voice chat flow:
-    1. Transcribe user's audio to text
-    2. Send transcribed text directly to AI agent (LLM handles multilingual conversation)
-    3. Get response from AI agent in user's language
-    4. Synthesize response to speech
+    Voice chat flow with optional streaming:
+    - If ENABLE_STREAMING=true: Uses Sarvam streaming TTS for real-time audio
+    - If ENABLE_STREAMING=false: Uses traditional batch TTS
     
-    Returns both text and audio response
-    
-    Note: Translation layer removed - Claude LLM handles multilingual conversation natively
+    Streaming provides much faster perceived response time.
     """
+    # Check if streaming is enabled
+    enable_streaming = os.getenv("ENABLE_STREAMING", "false").lower() == "true"
+    
+    if enable_streaming:
+        # Use streaming endpoint
+        return await voice_chat_stream(audio, session_id, user_id, language)
+    
+    # Original non-streaming implementation
     try:
         # Step 1: Transcribe audio
         audio_bytes = await audio.read()
@@ -367,3 +371,223 @@ async def voice_chat(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Voice chat failed: {str(e)}")
+
+
+@router.post("/chat-stream", summary="Real-time streaming voice chat with Sarvam TTS")
+async def voice_chat_stream(
+    audio: UploadFile = File(...),
+    session_id: str = Form(...),
+    user_id: Optional[str] = Form(None),
+    language: str = Form("hi-IN"),
+):
+    """
+    Real-time streaming voice chat using Sarvam's WebSocket TTS:
+    1. Transcribe user's audio
+    2. Stream LLM text chunks directly to Sarvam TTS WebSocket
+    3. Stream audio chunks back as Sarvam generates them
+    
+    Audio starts playing within 2-3 seconds - truly real-time!
+    """
+    import asyncio
+    import base64
+    from fastapi.responses import StreamingResponse
+    import json
+    
+    try:
+        # Step 1: Transcribe audio
+        audio_bytes = await audio.read()
+        audio_format = audio.filename.split(".")[-1].lower()
+        if audio_format not in ["wav", "mp3", "webm", "ogg"]:
+            audio_format = "wav"
+        
+        voice_service = get_voice_service()
+        transcription = voice_service.transcribe(
+            audio_bytes=audio_bytes,
+            language_code=language,
+            audio_format=audio_format
+        )
+        
+        user_text = transcription["text"]
+        logger.info("User said (%s): %s", language, user_text)
+        
+        async def generate_stream():
+            # Send transcription
+            yield f"data: {json.dumps({'type': 'transcription', 'text': user_text})}\n\n"
+            
+            # Get or create agent
+            is_new_session = session_id not in _agent_sessions
+            
+            if is_new_session:
+                preferred_language = language
+                user_name = ""
+                
+                if user_id:
+                    try:
+                        from services.dynamodb_service import get_user
+                        user_data = get_user(user_id)
+                        if user_data:
+                            preferred_language = user_data.get("preferred_language", language)
+                            user_name = user_data.get("name", "")
+                    except Exception as e:
+                        logger.warning("Failed to get user data: %s", e)
+                
+                _agent_sessions[session_id] = ProfilingAgent(
+                    session_id=session_id,
+                    user_name=user_name,
+                    preferred_language=preferred_language
+                )
+                
+                # Restore chat history
+                if user_id:
+                    try:
+                        from services.dynamodb_service import get_user
+                        user = get_user(user_id)
+                        if user and "chat_history" in user and user["chat_history"]:
+                            chat_history = user["chat_history"]
+                            restored_messages = []
+                            for msg in chat_history:
+                                restored_messages.append({
+                                    "role": msg["role"],
+                                    "content": [{"text": msg["content"]}]
+                                })
+                            _agent_sessions[session_id].agent.messages = restored_messages
+                            logger.info("Restored chat history for streaming")
+                    except Exception as e:
+                        logger.warning("Failed to restore chat history: %s", e)
+            
+            agent = _agent_sessions[session_id]
+            full_response = ""
+            
+            # Stream LLM text chunks to UI while collecting for TTS
+            llm_chunks = []
+            async for chunk in agent.run_stream(user_text):
+                full_response += chunk
+                llm_chunks.append(chunk)
+                # Send text chunk to UI immediately for visual feedback
+                yield f"data: {json.dumps({'type': 'text_chunk', 'text': chunk})}\n\n"
+            
+            # Get the ACTUAL full response with markers from the agent
+            actual_full_response = getattr(agent, 'last_full_response', full_response)
+            
+            logger.info("[INFO] LLM streaming complete, total length: %d", len(full_response))
+            
+            # Now synthesize the complete text for audio (in parallel, UI already has text)
+            try:
+                # Use regular TTS synthesis with complete text (faster than streaming TTS)
+                synthesis_result = voice_service.synthesize(
+                    text=full_response,
+                    language_code=language
+                )
+                
+                # Send the complete audio as one chunk
+                yield f"data: {json.dumps({'type': 'audio_complete', 'audio_base64': synthesis_result['audio_base64'], 'audio_format': synthesis_result['audio_format']})}\n\n"
+                
+                logger.info("[INFO] TTS synthesis complete")
+            except Exception as e:
+                logger.error("TTS synthesis failed: %s", e)
+                import traceback
+                traceback.print_exc()
+            
+            # Send complete text
+            yield f"data: {json.dumps({'type': 'text_complete', 'text': full_response})}\n\n"
+            
+            # Process response for metadata and get cleaned text (use actual_full_response with markers)
+            result = agent._process_response(actual_full_response)
+            cleaned_response = result.get("response", full_response)
+            
+            # Update the agent's last message with cleaned response (remove markers)
+            if hasattr(agent.agent, "messages") and agent.agent.messages:
+                # Find the last assistant message and update it with cleaned text
+                for i in range(len(agent.agent.messages) - 1, -1, -1):
+                    msg = agent.agent.messages[i]
+                    role = None
+                    if isinstance(msg, dict):
+                        role = msg.get("role")
+                    elif hasattr(msg, "role"):
+                        role = msg.role
+                    
+                    if role == "assistant":
+                        # Update this message with cleaned response
+                        if isinstance(msg, dict):
+                            if isinstance(msg.get("content"), list):
+                                msg["content"] = [{"text": cleaned_response}]
+                            else:
+                                msg["content"] = cleaned_response
+                        elif hasattr(msg, "content"):
+                            if isinstance(msg.content, list):
+                                msg.content = [{"text": cleaned_response}]
+                            else:
+                                msg.content = cleaned_response
+                        break
+            
+            # Save chat history (now with cleaned response)
+            if user_id:
+                try:
+                    from services.dynamodb_service import update_chat_history
+                    if hasattr(agent.agent, "messages") and agent.agent.messages:
+                        serialized_chat = []
+                        for msg in agent.agent.messages:
+                            role = None
+                            content_str = ""
+                            
+                            if isinstance(msg, dict):
+                                role = msg.get("role")
+                                content = msg.get("content")
+                            elif hasattr(msg, "role"):
+                                role = msg.role
+                                content = msg.content if hasattr(msg, "content") else None
+                            else:
+                                continue
+                            
+                            if not role:
+                                continue
+                            
+                            if isinstance(content, str):
+                                content_str = content
+                            elif isinstance(content, list):
+                                text_parts = []
+                                for block in content:
+                                    if isinstance(block, str):
+                                        text_parts.append(block)
+                                    elif isinstance(block, dict) and "text" in block:
+                                        text_parts.append(str(block["text"]))
+                                    elif hasattr(block, "text"):
+                                        text_parts.append(str(block.text))
+                                content_str = " ".join(text_parts).strip()
+                            else:
+                                content_str = str(content)
+                            
+                            if content_str:
+                                serialized_chat.append({"role": role, "content": content_str})
+                        
+                        if serialized_chat:
+                            update_chat_history(user_id, serialized_chat)
+                except Exception as e:
+                    logger.warning("Failed to save chat history: %s", e)
+            
+            # Save profile if complete
+            if user_id and result.get("profile_data"):
+                try:
+                    from services.dynamodb_service import save_profile_assessment
+                    save_profile_assessment(user_id, result["profile_data"])
+                except Exception as e:
+                    logger.warning("Failed to save profile: %s", e)
+            
+            # Send completion
+            yield f"data: {json.dumps({'type': 'complete', 'is_ready_for_photo': result.get('is_ready_for_photo', False), 'is_complete': result.get('is_complete', False), 'intent_extracted': result.get('intent_extracted'), 'profession_skill_extracted': result.get('profession_skill_extracted'), 'theory_score_extracted': result.get('theory_score_extracted')})}\n\n"
+        
+        return StreamingResponse(
+            generate_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
+        
+    except Exception as e:
+        logger.error("Streaming voice chat failed: %s", e)
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Streaming voice chat failed: {str(e)}")

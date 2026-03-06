@@ -40,17 +40,15 @@ export default function Upskill() {
         }
 
         const sessionId = sessionStorage.getItem('swavalambi_session_id') || 'demo-session';
-        const ratingStr = localStorage.getItem('swavalambi_skill_rating') || '0';
-        const rating = parseInt(ratingStr, 10);
+        const userId = localStorage.getItem('swavalambi_user_id');
 
         const res = await fetch(`${API_BASE}/recommendations/fetch`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             session_id: sessionId,
-            profession_skill: skill,
-            intent: 'upskill', // specifically requesting training centers
-            skill_rating: rating,
+            user_id: userId,     // Backend fetches full profile from DynamoDB
+            intent: 'upskill',   // Override intent for upskill page
           }),
         });
 

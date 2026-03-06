@@ -2,13 +2,18 @@
 routes_recommendations.py — Agentic personalized recommendations endpoint.
 
 POST /api/recommendations/fetch
-  Body: { session_id, user_id?, profession_skill, intent, skill_rating, state? }
+  Body: { session_id, user_id?, profession_skill?, intent?, skill_rating?, state? }
 
 Returns relevant jobs, schemes, and/or training centers based on the
 user's profile using agentic orchestration with Strands + Bedrock.
 
 The orchestrator uses Claude on Bedrock (via Strands) to intelligently 
 decide which agents to invoke as tools based on the user's profile and intent.
+
+Usage:
+- Send user_id to fetch full profile from DynamoDB (recommended)
+- Optionally override intent in request to control which agent is called
+- Or send individual fields (profession_skill, intent, skill_rating) for backward compatibility
 """
 
 from fastapi import APIRouter, HTTPException
@@ -76,7 +81,8 @@ async def get_recommendations(req: RecommendationRequest):
                 raise HTTPException(status_code=400, detail="intent missing in profile")
             
             user_profile["profession_skill"] = profile_assessment["profession_skill"]
-            user_profile["intent"] = profile_assessment["intent"]
+            # Allow intent override from request, otherwise use profile intent
+            user_profile["intent"] = req.intent if req.intent else profile_assessment["intent"]
             user_profile["skill_rating"] = int(profile_assessment.get("theory_score", 3))
             user_profile["state"] = profile_assessment.get("preferred_location", "All India")
             

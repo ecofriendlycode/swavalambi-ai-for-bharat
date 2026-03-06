@@ -54,6 +54,14 @@ export default function Login() {
       setError("Please enter your email and password.");
       return;
     }
+    
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(identifier)) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+    
     setLoading(true);
     setError("");
     try {
@@ -152,13 +160,14 @@ export default function Login() {
         {/* Email field */}
         <label className="flex flex-col w-full">
           <p className="text-slate-700 text-sm font-semibold leading-normal pb-2">
-            Email or Phone Number
+            Email Address
           </p>
           <div className="relative">
             <input
               className="flex w-full rounded-xl text-slate-900 border-none bg-slate-200/50 focus:ring-2 focus:ring-primary h-14 placeholder:text-slate-500 px-4 text-base font-normal outline-none transition-all"
-              placeholder="Enter your email or phone"
-              type="text"
+              placeholder="Enter your email"
+              type="email"
+              inputMode="email"
               value={identifier}
               onChange={(e) => {
                 setIdentifier(e.target.value);

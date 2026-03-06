@@ -80,19 +80,28 @@ class VisionAgent:
         
         Also provide 'feedback' (2-3 sentences) explaining what you observe - be specific about strengths and areas for improvement.
         
-        CRITICAL RULES:
-        - Output ONLY valid JSON, nothing else
-        - Do NOT mention "Level" or level numbers in the feedback
-        - Do NOT mention "dashboard" or "redirecting"
-        - Do NOT add any text outside the JSON
-        - Keep feedback focused on the work quality only
-        - Write the feedback in {preferred_language.split('-')[0]} language
+        ⚠️ CRITICAL OUTPUT RULES - FOLLOW EXACTLY:
+        1. Output ONLY valid JSON with exactly 2 fields: vision_score and feedback
+        2. The feedback field should contain ONLY your assessment of the work quality
+        3. DO NOT add any text before or after the JSON
+        4. DO NOT mention: "Level", "assigned", "dashboard", "redirecting", "personalized"
+        5. DO NOT add congratulations or next steps - ONLY evaluate the work shown
+        6. Write feedback in {preferred_language.split('-')[0]} language
+        7. Keep feedback focused on: technique, quality, craftsmanship, areas to improve
         
-        Output format:
+        CORRECT OUTPUT EXAMPLE:
         {{
             "vision_score": 4,
-            "feedback": "The work shows good technique..."
+            "feedback": "The stitching shows good attention to detail and the fabric handling is neat. The seam alignment could be improved for a more professional finish."
         }}
+        
+        WRONG OUTPUT (DO NOT DO THIS):
+        {{
+            "vision_score": 4,
+            "feedback": "Great work! You have been assigned Level 4. Redirecting you to your dashboard..."
+        }}
+        
+        Now evaluate the work sample and output ONLY the JSON.
         """
 
         try:
@@ -167,11 +176,16 @@ class VisionAgent:
             
             # Remove any mentions of "Level X", "dashboard", "redirecting", etc.
             import re
-            feedback = re.sub(r'\s*You have been assigned\s+Level\s+\d+\.?', '', feedback, flags=re.IGNORECASE)
-            feedback = re.sub(r'\s*Level\s+\d+\.?', '', feedback, flags=re.IGNORECASE)
-            feedback = re.sub(r'\s*Redirecting you to.*?dashboard.*?\.', '', feedback, flags=re.IGNORECASE)
-            feedback = re.sub(r'\s*Redirecting.*?\.', '', feedback, flags=re.IGNORECASE)
-            feedback = feedback.strip()
+            # Remove "You have been assigned Level X"
+            feedback = re.sub(r'You have been assigned\s+Level\s+\d+\.?\s*', '', feedback, flags=re.IGNORECASE)
+            # Remove standalone "Level X"
+            feedback = re.sub(r'Level\s+\d+\.?\s*', '', feedback, flags=re.IGNORECASE)
+            # Remove "Redirecting you to your personalized dashboard"
+            feedback = re.sub(r'Redirecting you to your personalized dashboard\.?\s*', '', feedback, flags=re.IGNORECASE)
+            feedback = re.sub(r'Redirecting you to.*?dashboard.*?\.?\s*', '', feedback, flags=re.IGNORECASE)
+            feedback = re.sub(r'Redirecting.*?\.?\s*', '', feedback, flags=re.IGNORECASE)
+            # Remove extra whitespace
+            feedback = re.sub(r'\s+', ' ', feedback).strip()
             
             return {
                 "vision_score": result.get("vision_score", 1),

@@ -116,3 +116,13 @@ backend/pgvector/
 backend/numpy/
 backend/numpy*
 nohup.out
+
+LANGUAGE_FLOW_VERIFICATION.md
+STREAMING_IMPLEMENTATION.md
+TTS_TEXT_CLEANING.md
+VOICE_STREAMING_TROUBLESHOOTING.md
+backend/scripts/clean_chat_history.py
+backend/test_sarvam_TTS.py
+backend/test_streaming.py
+backend/test_text_cleaning.py
+backend/agents/profiling_agent_backup.py

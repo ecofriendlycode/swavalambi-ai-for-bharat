@@ -4,6 +4,7 @@ voice_service.py — Voice services with AWS and Sarvam AI providers
 Supports:
 - Speech-to-Text (Transcribe / Sarvam Saaras)
 - Text-to-Speech (Polly / Sarvam Bulbul)
+- Text-to-Speech Streaming (Sarvam Bulbul WebSocket)
 - Translation (AWS Translate / Sarvam Mayura)
 """
 
@@ -12,8 +13,65 @@ import os
 import requests
 import base64
 import json
-from typing import Optional, Dict, Any
+import asyncio
+import re
+from typing import Optional, Dict, Any, AsyncGenerator
 from enum import Enum
+from sarvamai import AsyncSarvamAI, AudioOutput, EventResponse
+
+
+def clean_text_for_tts(text: str) -> str:
+    """
+    Clean text for TTS by removing markdown formatting, emojis, and special characters.
+    
+    Removes:
+    - Markdown bold (**text**)
+    - Markdown italic (*text*)
+    - Emojis and emoticons
+    - Forward slashes (/)
+    - Backslashes (\\)
+    - Extra whitespace
+    
+    Args:
+        text: Raw text with markdown and emojis
+    
+    Returns:
+        Cleaned text suitable for TTS
+    """
+    if not text:
+        return ""
+    
+    # Remove markdown bold (**text**)
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+    
+    # Remove markdown italic (*text*)
+    text = re.sub(r'\*([^*]+)\*', r'\1', text)
+    
+    # Remove forward slashes and backslashes
+    text = text.replace('/', ' ')
+    text = text.replace('\\', ' ')
+    
+    # Remove emojis (Unicode emoji ranges)
+    # This covers most common emojis
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map symbols
+        "\U0001F1E0-\U0001F1FF"  # flags (iOS)
+        "\U00002702-\U000027B0"  # dingbats
+        "\U000024C2-\U0001F251"  # enclosed characters
+        "\U0001F900-\U0001F9FF"  # supplemental symbols
+        "\U0001FA00-\U0001FA6F"  # extended symbols
+        "]+",
+        flags=re.UNICODE
+    )
+    text = emoji_pattern.sub('', text)
+    
+    # Remove extra whitespace (including multiple spaces created by slash removal)
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    return text
 
 
 class VoiceProvider(Enum):
@@ -45,6 +103,95 @@ class VoiceService:
         """Initialize Sarvam AI configuration"""
         self.sarvam_api_key = os.getenv("SARVAM_API_KEY")
         self.sarvam_base_url = "https://api.sarvam.ai"
+        # Initialize async client for streaming TTS
+        self.sarvam_async_client = None
+    
+    def _get_async_sarvam_client(self):
+        """Get or create async Sarvam client"""
+        if self.sarvam_async_client is None:
+            self.sarvam_async_client = AsyncSarvamAI(
+                api_subscription_key=self.sarvam_api_key
+            )
+        return self.sarvam_async_client
+    
+    async def synthesize_stream(
+        self,
+        text_stream: AsyncGenerator[str, None],
+        language_code: str = "hi-IN"
+    ) -> AsyncGenerator[bytes, None]:
+        """
+        Stream text-to-speech using Sarvam's WebSocket streaming API.
+        
+        Args:
+            text_stream: Async generator yielding text chunks from LLM
+            language_code: Language code (e.g., 'hi-IN', 'te-IN')
+        
+        Yields:
+            Audio bytes chunks as they're generated
+        """
+        from sarvamai import EventResponse
+        
+        client = self._get_async_sarvam_client()
+        
+        # Get speaker from .env based on language
+        # Extract language code (e.g., 'hi' from 'hi-IN')
+        lang_code = language_code.split('-')[0].upper()
+        env_key = f"SARVAM_TTS_SPEAKER_{lang_code}"
+        speaker = os.getenv(env_key, os.getenv("SARVAM_TTS_SPEAKER", "shubh"))
+        
+        # Collect all text first (Sarvam works best with complete text)
+        full_text = ""
+        try:
+            async for text_chunk in text_stream:
+                if text_chunk:
+                    full_text += text_chunk
+        except Exception as e:
+            print(f"[ERROR] Failed to collect text from LLM: {e}")
+        
+        if not full_text:
+            print("[WARN] No text to synthesize")
+            return
+        
+        # Clean text before TTS (remove markdown and emojis)
+        cleaned_text = clean_text_for_tts(full_text)
+        
+        # Use send_completion_event=True to get proper stream termination
+        try:
+            async with client.text_to_speech_streaming.connect(
+                model="bulbul:v3",
+                send_completion_event=True
+            ) as ws:
+                # Configure the WebSocket
+                await ws.configure(
+                    target_language_code=language_code,
+                    speaker=speaker
+                )
+                
+                # Send complete cleaned text (Sarvam's recommended approach)
+                await ws.convert(cleaned_text)
+                print(f"[INFO] Sent {len(cleaned_text)} chars to Sarvam TTS with speaker: {speaker} (lang: {language_code})")
+                
+                # Flush to signal end of text
+                await ws.flush()
+                print(f"[INFO] Flushed text buffer")
+                
+                # Receive and yield audio chunks as they arrive
+                chunk_count = 0
+                async for message in ws:
+                    if isinstance(message, AudioOutput):
+                        chunk_count += 1
+                        audio_chunk = base64.b64decode(message.data.audio)
+                        yield audio_chunk
+                    elif isinstance(message, EventResponse):
+                        # Check for completion event
+                        if message.data.event_type == "final":
+                            print(f"[INFO] Received TTS completion event after {chunk_count} chunks")
+                            break
+                            
+        except Exception as e:
+            print(f"[ERROR] TTS streaming failed: {e}")
+            import traceback
+            traceback.print_exc()
     
     def transcribe(
         self,
@@ -155,21 +302,26 @@ class VoiceService:
         audio_bytes: bytes,
         language_code: str
     ) -> Dict[str, Any]:
-        """Transcribe using Sarvam AI Saaras v3"""
+        """
+        Transcribe using Sarvam AI Saaras v3
+        
+        Explicitly sets language_code to prevent auto-detection errors.
+        Uses 'codemix' mode for natural code-switching (English + Indic).
+        """
         url = f"{self.sarvam_base_url}/speech-to-text"
         headers = {
             "api-subscription-key": self.sarvam_api_key,
         }
-
-        # NOTE: language_code is NOT a valid request field for Sarvam STT —
-        # it is auto-detected and returned in the response.
-        # Only 'file', 'model', and optional 'mode' are accepted.
+        
+        print(f"[INFO] Transcribing audio with language: {language_code}")
+        
         files = {
             "file": ("audio.wav", audio_bytes, "audio/wav")
         }
         data = {
             "model": os.getenv("SARVAM_STT_MODEL", "saaras:v3"),
-            "mode": "transcribe",  # transcribe | translate | verbatim | codemix
+            "language_code": language_code,  # ✅ Force specific language (no auto-detection)
+            "mode": "codemix",  # ✅ Handle code-switching (English words + Indic script)
         }
 
         response = requests.post(url, headers=headers, files=files, data=data)
@@ -177,9 +329,13 @@ class VoiceService:
 
         result = response.json()
         detected_lang = result.get("language_code", language_code)
+        transcript = result.get("transcript", "")
+        
+        print(f"[INFO] Transcription complete: {transcript[:100]}")
+        print(f"[INFO] Language: {detected_lang}")
 
         return {
-            "text": result.get("transcript", ""),
+            "text": transcript,
             "language": detected_lang,
             "confidence": result.get("confidence", 0.0),
             "provider": "sarvam"
@@ -196,7 +352,7 @@ class VoiceService:
         Synthesize text to speech
         
         Args:
-            text: Text to convert to speech
+            text: Text to convert to speech (will be cleaned of markdown/emojis)
             language_code: Language code
             voice_id: Optional voice ID (AWS: 'Aditi', 'Kajal', etc.)
         
@@ -208,11 +364,14 @@ class VoiceService:
                 "provider": "aws"
             }
         """
+        # Clean text before TTS (remove markdown and emojis)
+        cleaned_text = clean_text_for_tts(text)
+        
         try:
             if self.provider == VoiceProvider.AWS:
-                return self._synthesize_aws(text, language_code, voice_id)
+                return self._synthesize_aws(cleaned_text, language_code, voice_id)
             else:
-                return self._synthesize_sarvam(text, language_code)
+                return self._synthesize_sarvam(cleaned_text, language_code)
         except Exception as e:
             print(f"[ERROR] Synthesis failed with {self.provider.value}: {e}")
             if not self.fallback_enabled:
@@ -220,10 +379,10 @@ class VoiceService:
             # Fallback
             if self.provider == VoiceProvider.AWS:
                 print("[INFO] Falling back to Sarvam AI")
-                return self._synthesize_sarvam(text, language_code)
+                return self._synthesize_sarvam(cleaned_text, language_code)
             else:
                 print("[INFO] Falling back to AWS")
-                return self._synthesize_aws(text, language_code, voice_id)
+                return self._synthesize_aws(cleaned_text, language_code, voice_id)
     
     def _synthesize_aws(
         self,
@@ -235,17 +394,21 @@ class VoiceService:
         # Map language to voice
         if not voice_id:
             voice_map = {
-                "hi-IN": "Aditi",  # Hindi female
-                "ta-IN": "Kajal",  # Tamil female
-                "te-IN": "Kajal",  # Telugu (use Tamil voice)
+                "hi-IN": "Aditi",  # Hindi female (standard engine)
+                "ta-IN": "Kajal",  # Tamil female (neural engine)
+                "te-IN": "Kajal",  # Telugu (use Tamil voice, neural engine)
             }
             voice_id = voice_map.get(language_code, "Aditi")
+        
+        # Determine engine based on voice
+        # Aditi only supports standard engine, Kajal requires neural
+        engine = "neural" if voice_id == "Kajal" else "standard"
         
         response = self.polly_client.synthesize_speech(
             Text=text,
             OutputFormat="mp3",
             VoiceId=voice_id,
-            Engine="standard"  # Use standard engine (Aditi doesn't support neural)
+            Engine=engine
         )
         
         audio_bytes = response["AudioStream"].read()
@@ -270,15 +433,29 @@ class VoiceService:
             "Content-Type": "application/json"
         }
 
+        # Get speaker from .env based on language
+        # Extract language code (e.g., 'hi' from 'hi-IN')
+        lang_code = language_code.split('-')[0].upper()
+        env_key = f"SARVAM_TTS_SPEAKER_{lang_code}"
+        speaker = os.getenv(env_key, os.getenv("SARVAM_TTS_SPEAKER", "shubh"))
+
         data = {
             "text": text,
             "target_language_code": language_code,
-            "model": "bulbul:v3",  # Force v3 to match working app
-            "speaker": os.getenv("SARVAM_TTS_SPEAKER", "rohan"),
-            "speech_sample_rate": 24000,
+            "model": "bulbul:v3",
+            "speaker": speaker,
+            "speech_sample_rate": 8000,  # Use 8kHz for better browser compatibility
         }
 
+        print(f"[DEBUG] Sarvam TTS request: lang={language_code}, speaker={speaker}, text_len={len(text)}")
+        
         response = requests.post(url, headers=headers, json=data)
+        
+        # Log error details if request fails
+        if not response.ok:
+            print(f"[ERROR] Sarvam TTS failed: {response.status_code}")
+            print(f"[ERROR] Response: {response.text}")
+        
         response.raise_for_status()
 
         result = response.json()

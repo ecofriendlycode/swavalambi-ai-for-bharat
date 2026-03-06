@@ -41,17 +41,15 @@ export default function Jobs() {
         }
 
         const sessionId = sessionStorage.getItem('swavalambi_session_id') || 'demo-session';
-        const ratingStr = localStorage.getItem('swavalambi_skill_rating') || '3';
-        const rating = parseInt(ratingStr, 10);
+        const userId = localStorage.getItem('swavalambi_user_id');
 
         const res = await fetch(`${API_BASE}/recommendations/fetch`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             session_id: sessionId,
-            profession_skill: skill,
-            intent: 'job', // specifically requesting jobs
-            skill_rating: rating,
+            user_id: userId,  // Backend fetches full profile from DynamoDB
+            intent: 'job',    // Override intent for jobs page
           }),
         });
 

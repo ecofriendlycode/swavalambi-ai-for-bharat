@@ -167,7 +167,8 @@ class ProfilingAgent:
         
         4. **Experience**: 
            - Ask: "How many years of experience do you have in [their skill]?"
-           - This helps assess their level
+           - This helps assess their level.
+           - ⚠️ CRITICAL: When the user answers with a number (e.g., "2", "5"), ALWAYS interpret it as years of experience, NOT as an option number from a previous list.
         
         5. **Skill-Specific Questions** (Ask 2-3 based on their profession):
            
@@ -234,9 +235,11 @@ class ProfilingAgent:
         - Use emojis sparingly (1-2 per message max)
         - Reply in the same language the user speaks
         
-        IMPORTANT - OPTION FORMATTING:
-        When presenting options, ALWAYS use **bold text** (double asterisks) to make them clickable.
-        Example: "Are you looking for **job opportunities**, wanting to **improve your skills**, or interested in **starting a business**?"
+        IMPORTANT - OPTION FORMATTING & INTERPRETATION:
+        1. When presenting options, ALWAYS use **bold text** (double asterisks) to make them clickable.
+           Example: "Are you looking for **job opportunities**, wanting to **improve your skills**, or interested in **starting a business**?"
+        2. DO NOT use numbered lists (1., 2., 3.) for options. This causes confusion when asking for numeric answers (like years of experience or salary).
+        3. If the user replies with a number right after you asked for experience, treat it purely as years of experience. Never retroactively apply a number to a previous multiple-choice question.
         
         CRITICAL - PROFILE OUTPUT RULES:
         ⚠️ MANDATORY: You MUST ALWAYS output the JSON profile when you have gathered ALL required information.
@@ -266,9 +269,28 @@ class ProfilingAgent:
         - For intent="job": Include preferred_location and salary_expectation
         - For intent="upskill" or "loan": Set preferred_location="" and salary_expectation=""
         
-        After outputting the JSON:
-        - If is_ready_for_photo is true: Add a message asking them to upload a WORK SAMPLE photo (their actual work, not personal photo)
-        - If is_ready_for_photo is false: Add a warm, encouraging closing message about their learning journey
+        ⚠️ CRITICAL - USER-FACING MESSAGE RULES:
+        After outputting the JSON, add a SHORT message in the user's language ({user_language}):
+        
+        - If is_ready_for_photo is true: 
+          * Ask them to upload a WORK SAMPLE photo (their actual work, not personal photo)
+          * Keep it simple and encouraging
+          * Example (Hindi): "बहुत बढ़िया! अब अपने काम की एक फोटो अपलोड करें। 📸"
+          * Example (Telugu): "చాలా బాగుంది! ఇప్పుడు మీ పని యొక్క ఫోటో అప్‌లోడ్ చేయండి। 📸"
+        
+        - If is_ready_for_photo is false:
+          * Add a warm, encouraging message about learning opportunities
+          * Example (Hindi): "बहुत अच्छा! हम आपको सीखने के अवसर खोजने में मदद करेंगे। 🌱"
+          * Example (Telugu): "చాలా బాగుంది! మేము మీకు నేర్చుకునే అవకాశాలను కనుగొనడంలో సహాయం చేస్తాము। 🌱"
+        
+        ⚠️ DO NOT MENTION:
+        - "Level 5" or any level numbers
+        - "Redirecting to dashboard"
+        - "You have been assigned"
+        - Any English text if user's language is not English
+        - Technical terms like "theory_score" or "profile_data"
+        
+        Keep the message SHORT (1-2 sentences), WARM, and in the USER'S LANGUAGE.
         
         SCORING RULES:
         - theory_score: 1-2 (beginner), 3-4 (intermediate), 5 (advanced)
@@ -336,6 +358,96 @@ class ProfilingAgent:
         if not response_text:
             raise Exception("No response generated from any model")
 
+        return self._process_response(response_text)
+    
+    async def run_stream(self, user_message: str):
+        """
+        Streams the conversational agent response using Strands streaming.
+        Yields chunks of text as they arrive from the LLM.
+        
+        Filters out PROFILE_DATA markers and JSON only when they appear,
+        otherwise streams normally for fast UI updates.
+        
+        Stores the complete unfiltered response in self.last_full_response
+        for profile data extraction.
+        
+        Uses Strands' stream_async() method for async streaming.
+        """
+        try:
+            print(f"[INFO] Starting streaming response with Strands...")
+            
+            full_response = ""
+            markers_detected = False
+            buffer = ""  # Buffer to check for "PROFILE" before yielding
+            
+            # Use Strands' stream_async() method for async streaming
+            async for event in self.agent.stream_async(user_message):
+                # Extract text from "data" field in events
+                if "data" in event:
+                    chunk_text = event["data"]
+                    full_response += chunk_text
+                    
+                    # If markers already detected, just buffer (don't stream)
+                    if markers_detected:
+                        continue
+                    
+                    # Add to buffer
+                    buffer += chunk_text
+                    
+                    # Check if buffer contains start of "PROFILE"
+                    if "PROFILE" in buffer:
+                        markers_detected = True
+                        # Remove "PROFILE" and everything after from buffer
+                        clean_buffer = buffer[:buffer.find("PROFILE")]
+                        if clean_buffer:
+                            yield clean_buffer
+                        buffer = ""
+                        print(f"[INFO] Profile markers detected, stopping stream to UI")
+                        continue
+                    
+                    # If buffer is getting long without "PROFILE", yield it
+                    # Keep last 10 chars in buffer to catch "PROFILE" across chunks
+                    if len(buffer) > 10:
+                        yield_text = buffer[:-10]
+                        yield yield_text
+                        buffer = buffer[-10:]
+                
+            # Yield any remaining buffer (if no markers detected)
+            if not markers_detected and buffer:
+                yield buffer
+            
+            # Store the complete unfiltered response for profile extraction
+            self.last_full_response = full_response
+                
+            print(f"[INFO] Streaming complete, total length: {len(full_response)}")
+            
+            # If profile markers were found, yield the clean message after markers
+            if markers_detected and "PROFILE_DATA_END" in full_response:
+                end_marker = "PROFILE_DATA_END"
+                end_idx = full_response.find(end_marker) + len(end_marker)
+                text_after = full_response[end_idx:].strip()
+                
+                # Yield the message after markers (photo request or closing)
+                if text_after:
+                    print(f"[INFO] Yielding text after markers: {text_after[:100]}")
+                    yield "\n\n" + text_after
+            
+        except Exception as e:
+            print(f"[ERROR] Streaming failed: {e}")
+            import traceback
+            traceback.print_exc()
+            
+            # Fallback to non-streaming
+            print("[INFO] Falling back to non-streaming")
+            response = self.agent(user_message)
+            self.last_full_response = str(response)
+            yield str(response)
+            yield str(response)
+    
+    def _process_response(self, response_text: str) -> dict:
+        """
+        Process the complete response text and extract profile data if present.
+        """
         # Check if the LLM outputted the final JSON profile with markers
         if "PROFILE_DATA_START" in response_text and "PROFILE_DATA_END" in response_text:
             try:
@@ -361,12 +473,19 @@ class ProfilingAgent:
                 
                 is_ready = profile.get("is_ready_for_photo", False)
                 
+                # CRITICAL FIX: Remove the profile data markers from the response
+                # Extract text before markers (if any)
+                text_before_markers = response_text[:response_text.find(start_marker)].strip()
+                
                 # Extract any message after the JSON markers (photo request or closing)
                 message_after_json = response_text[end_idx + len(end_marker):].strip()
                 
-                # Use the message from LLM if present, otherwise use default
-                if message_after_json:
-                    final_response = message_after_json
+                # Combine text before and after markers, excluding the markers themselves
+                clean_response = (text_before_markers + "\n\n" + message_after_json).strip()
+                
+                # Use the cleaned message from LLM if present, otherwise use default
+                if clean_response:
+                    final_response = clean_response
                 elif is_ready:
                     # Skill-specific work sample message
                     skill = profile.get("profession_skill", "")

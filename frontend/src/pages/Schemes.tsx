@@ -34,8 +34,8 @@ export default function Schemes() {
   useEffect(() => {
     const ratingStr = localStorage.getItem('swavalambi_skill_rating');
     const skillStr  = localStorage.getItem('swavalambi_skill') || '';
-    const intentStr = localStorage.getItem('swavalambi_intent') || 'loan';
     const sessionId = sessionStorage.getItem('swavalambi_session_id') || 'anon';
+    const userId = localStorage.getItem('swavalambi_user_id');
 
     const rating = ratingStr ? parseInt(ratingStr, 10) : 0;
     setIsLocked(rating < 3);
@@ -54,9 +54,8 @@ export default function Schemes() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session_id: sessionId,
-        profession_skill: skillStr,
-        intent: intentStr === 'job' ? 'loan' : intentStr, // always fetch schemes
-        skill_rating: rating,
+        user_id: userId,  // Backend fetches full profile from DynamoDB
+        intent: 'loan',   // Override intent for schemes page
       }),
     })
       .then(r => r.ok ? r.json() : Promise.reject(r.status))

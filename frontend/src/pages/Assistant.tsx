@@ -234,6 +234,7 @@ export default function Assistant() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const hasPlayedGreetingRef = useRef(false); // Use ref instead of state for immediate persistence
+  const hasSavedInitialGreetingRef = useRef(false); // Prevent duplicate greeting saves
 
   // Playback state for voice playback controls
   const [playingMessageId, setPlayingMessageId] = useState<string | null>(null);
@@ -361,6 +362,9 @@ export default function Assistant() {
                 localStorage.setItem("swavalambi_voice_autoplay", "true");
               }
             }
+            
+            // Trigger chat history load after preferences are loaded
+            setIsLoadingHistory(false);
             return;
           }
         } catch (error) {
@@ -383,6 +387,9 @@ export default function Assistant() {
         setVoiceAutoPlay(true);
         localStorage.setItem("swavalambi_voice_autoplay", "true");
       }
+      
+      // Trigger chat history load after preferences are loaded
+      setIsLoadingHistory(false);
     };
     
     initializePreferences();
@@ -437,13 +444,14 @@ export default function Assistant() {
     const userName = storedName && !/^\+?\d{7,}$/.test(storedName.trim()) ? storedName : "";
     const welcomeMessage = getGreeting(languageCode, userName);
     
-    // Only set greeting if messages are empty (first time)
+    // Show greeting if messages are empty (first time OR reassessment)
     if (messages.length === 0) {
       const greetingMessageId = "msg-1";
       setMessages([{ id: greetingMessageId, role: "assistant", content: welcomeMessage }]);
       
       // Save greeting to chat history in DynamoDB
-      if (userId) {
+      if (userId && !hasSavedInitialGreetingRef.current) {
+        hasSavedInitialGreetingRef.current = true;
         const initialChat = [{ role: "assistant", content: welcomeMessage }];
         fetch(`${API_BASE}/users/${userId}/chat-history`, {
           method: "POST",
@@ -469,7 +477,11 @@ export default function Assistant() {
 
   // Load chat history on mount and when returning to this page
   useEffect(() => {
+    let isMounted = true; // Prevent duplicate loading in React Strict Mode
+    
     const loadChatHistory = async () => {
+      if (!isMounted) return; // Skip if already unmounted
+      
       setIsLoadingHistory(true);
       const userId = localStorage.getItem("swavalambi_user_id");
       const storedName = localStorage.getItem("swavalambi_name") || "";
@@ -500,7 +512,8 @@ export default function Assistant() {
         setMessages([{ id: "msg-1", role: "assistant", content: greetingMessage }]);
         
         // Save greeting to DynamoDB for reassessment
-        if (userId) {
+        if (userId && !hasSavedInitialGreetingRef.current) {
+          hasSavedInitialGreetingRef.current = true;
           const initialChat = [{ role: "assistant", content: greetingMessage }];
           fetch(`${API_BASE}/users/${userId}/chat-history`, {
             method: "POST",
@@ -608,7 +621,11 @@ export default function Assistant() {
     };
 
     loadChatHistory();
-  }, [location.pathname]); // Reload when navigating back to /assistant
+    
+    return () => {
+      isMounted = false; // Cleanup flag on unmount
+    };
+  }, [location.pathname]); // Only reload when navigating back, not on language change
 
   useEffect(() => {
     // Scroll to bottom when messages change, with a small delay to ensure rendering is complete
@@ -656,13 +673,16 @@ export default function Assistant() {
         `data:audio/${data.audio_format};base64,${data.audio_base64}`
       );
 
+      // CRITICAL FIX: Set playback rate to 1.0 (normal speed)
+      audio.playbackRate = 1.0;
+
       audio.onended = () => {
         setPlayingMessageId(null);
         setCurrentAudio(null);
       };
 
-      audio.onerror = () => {
-        console.error("Audio playback failed");
+      audio.onerror = (e) => {
+        console.error("Audio playback failed:", e);
         setPlayingMessageId(null);
         setCurrentAudio(null);
         setIsLoadingAudio(null);
@@ -801,6 +821,238 @@ export default function Assistant() {
       if (userId) payload.user_id = userId;
       if (userName && !/^\+?\d{7,}$/.test(userName.trim())) payload.user_name = userName;
 
+      // Check if streaming is enabled (you can add this to env or make it configurable)
+      const enableStreaming = import.meta.env.VITE_ENABLE_STREAMING === "true";
+      
+      if (enableStreaming) {
+        // Streaming mode using SSE
+        await handleStreamingResponse(payload);
+      } else {
+        // Non-streaming mode (original)
+        await handleNonStreamingResponse(payload);
+      }
+    } catch (error) {
+      console.error("Chat error:", error);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content:
+            "Sorry, I am having trouble connecting to the AI. Please ensure the backend server is running on port 8000.",
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleNonStreamingResponse = async (payload: any) => {
+    // Original non-streaming implementation
+    const assistantMessageId = (Date.now() + 1).toString();
+
+    // Show inline loading dots immediately (same UX as streaming)
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "...",
+        isReadyForPhoto: false,
+      },
+    ]);
+    setIsLoading(false); // Global loading no longer needed — inline dots handle it
+
+    const res = await fetch(`${API_BASE}/chat/chat-profile`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok) throw new Error(`API error: ${res.status}`);
+    const data = await res.json();
+
+    setMessages((prev) =>
+      prev.map((msg) =>
+        msg.id === assistantMessageId
+          ? {
+              ...msg,
+              content: data.response,
+              isReadyForPhoto: data.is_ready_for_photo,
+            }
+          : msg
+      )
+    );
+
+    // Auto-play voice if enabled
+    if (voiceAutoPlay && data.response) {
+      playMessage(assistantMessageId, data.response);
+    }
+
+    // Cache extracted profile fields
+    cacheProfileData(data);
+
+    if (data.is_complete) {
+      const userIntent = data.intent_extracted || localStorage.getItem("swavalambi_intent");
+      const path = userIntent === "upskill" ? "/upskill" : userIntent === "job" ? "/jobs" : "/home";
+      startRedirectCountdown(path);
+    }
+  };
+
+  const handleStreamingResponse = async (payload: any) => {
+    // Streaming implementation using SSE
+    const assistantMessageId = (Date.now() + 1).toString();
+    let streamedContent = "";
+    
+    console.log("[DEBUG] Creating assistant message with ID:", assistantMessageId);
+    
+    // Add assistant message with loading indicator that will be updated as chunks arrive
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "...", // Show loading indicator initially
+        isReadyForPhoto: false,
+      },
+    ]);
+
+    const response = await fetch(`${API_BASE}/chat/chat-profile-stream`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) throw new Error(`API error: ${response.status}`);
+    if (!response.body) throw new Error("No response body");
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split("\n");
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            const jsonStr = line.slice(6);
+            try {
+              const data = JSON.parse(jsonStr);
+
+              if (data.error) {
+                throw new Error(data.error);
+              }
+
+              if (data.chunk) {
+                // Append chunk to streamed content
+                streamedContent += data.chunk;
+                
+                console.log("[DEBUG] Received chunk, total length:", streamedContent.length);
+                
+                // Update message with accumulated content
+                setMessages((prev) =>
+                  prev.map((msg) =>
+                    msg.id === assistantMessageId
+                      ? { ...msg, content: streamedContent }
+                      : msg
+                  )
+                );
+              }
+
+              if (data.done) {
+                console.log("[DEBUG] Stream done, final content length:", streamedContent.length);
+                console.log("[DEBUG] Current messages count before update:", messages.length);
+                
+                // Stream complete - update with final metadata
+                // If streamedContent is still empty, show error
+                const finalContent = streamedContent || "Sorry, I received an empty response. Please try again.";
+                
+                setMessages((prev) => {
+                  console.log("[DEBUG] Messages in state before final update:", prev.length);
+                  const updated = prev.map((msg) =>
+                    msg.id === assistantMessageId
+                      ? {
+                          ...msg,
+                          content: finalContent,
+                          isReadyForPhoto: data.is_ready_for_photo || false,
+                        }
+                      : msg
+                  );
+                  console.log("[DEBUG] Messages after final update:", updated.length);
+                  return updated;
+                });
+
+                // Auto-play voice if enabled (play complete response)
+                if (voiceAutoPlay && streamedContent) {
+                  playMessage(assistantMessageId, streamedContent);
+                }
+
+                // Cache extracted profile fields
+                cacheProfileData(data);
+
+                if (data.is_complete) {
+                  const userIntent = data.intent_extracted || localStorage.getItem("swavalambi_intent");
+                  const path = userIntent === "upskill" ? "/upskill" : userIntent === "job" ? "/jobs" : "/home";
+                  startRedirectCountdown(path);
+                }
+              }
+            } catch (e) {
+              console.error("Failed to parse SSE data:", e);
+            }
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  };
+
+  const cacheProfileData = (data: any) => {
+    // Helper function to cache extracted profile fields
+    if (data.intent_extracted) {
+      localStorage.setItem("swavalambi_intent", data.intent_extracted);
+    }
+    if (data.profession_skill_extracted) {
+      localStorage.setItem("swavalambi_skill", data.profession_skill_extracted);
+    }
+    if (data.theory_score_extracted) {
+      localStorage.setItem("swavalambi_theory_score", data.theory_score_extracted.toString());
+    }
+    if (data.gender_extracted) {
+      localStorage.setItem("swavalambi_gender", data.gender_extracted.toLowerCase());
+    }
+    if (data.location_extracted) {
+      localStorage.setItem("swavalambi_location", data.location_extracted);
+    }
+  };
+
+  const handleSendMessageOld = async () => {
+    if (!input.trim() || isLoading) return;
+
+    // Early intent detection — save before backend responds
+    detectAndCacheIntent(input);
+
+    const userMsg: Message = {
+      id: Date.now().toString(),
+      role: "user",
+      content: input,
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    setInput("");
+    setIsLoading(true);
+
+    try {
+      const userId = localStorage.getItem("swavalambi_user_id");
+      const userName = localStorage.getItem("swavalambi_name") || "";
+      
+      const payload: any = { session_id: sessionId, message: input };
+      if (userId) payload.user_id = userId;
+      if (userName && !/^\+?\d{7,}$/.test(userName.trim())) payload.user_name = userName;
+
       // Real call to FastAPI backend -> ProfilingAgent -> Bedrock/Anthropic
       const res = await fetch(`${API_BASE}/chat/chat-profile`, {
         method: "POST",
@@ -913,14 +1165,23 @@ export default function Assistant() {
         localStorage.setItem("swavalambi_intent", "job");
       }
 
+      const assistantMessageId = (Date.now() + 1).toString();
       setMessages((prev) => [
         ...prev,
         {
-          id: (Date.now() + 1).toString(),
+          id: assistantMessageId,
           role: "assistant",
-          content: `I've analyzed your work! ${result.feedback} You have been assigned **Level ${result.skill_rating}**. Redirecting you to your personalized dashboard...`,
+          content: result.feedback,  // Just use the feedback from backend (already in user's language)
         },
       ]);
+
+      // Auto-play feedback if voice is enabled
+      if (voiceAutoPlay) {
+        // Small delay to ensure message is rendered
+        setTimeout(() => {
+          playMessage(assistantMessageId, result.feedback);
+        }, 500);
+      }
 
       // Start redirect countdown instead of immediate redirect
       const userIntent = localStorage.getItem("swavalambi_intent");
@@ -984,6 +1245,296 @@ export default function Assistant() {
   };
 
   const sendVoiceMessage = async (audioBlob: Blob) => {
+    setIsLoading(true);
+    
+    // Check if streaming is enabled
+    const enableStreaming = import.meta.env.VITE_ENABLE_STREAMING === "true";
+    
+    if (enableStreaming) {
+      await sendVoiceMessageStreaming(audioBlob);
+    } else {
+      await sendVoiceMessageNonStreaming(audioBlob);
+    }
+  };
+
+  const sendVoiceMessageNonStreaming = async (audioBlob: Blob) => {
+    try {
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'recording.webm');
+      formData.append('session_id', sessionId);
+      formData.append('language', selectedLanguage);
+      
+      const userId = localStorage.getItem("swavalambi_user_id");
+      if (userId) formData.append('user_id', userId);
+
+      const res = await fetch(`${API_BASE}/voice/chat`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!res.ok) throw new Error(`Voice API error: ${res.status}`);
+      const data = await res.json();
+
+      // Add user message
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString(),
+          role: "user",
+          content: data.transcribed_text,
+        },
+      ]);
+
+      // Add assistant response
+      const assistantMessageId = (Date.now() + 1).toString();
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: assistantMessageId,
+          role: "assistant",
+          content: data.response_text,
+          isReadyForPhoto: data.is_ready_for_photo,
+        },
+      ]);
+
+      // Play audio response
+      if (data.audio_base64) {
+        playAudio(data.audio_base64, data.audio_format, assistantMessageId);
+      }
+
+      // Cache extracted data
+      cacheProfileData(data);
+      
+      if (data.is_complete) {
+        const userIntent = data.intent_extracted || localStorage.getItem("swavalambi_intent");
+        const path = userIntent === "upskill" ? "/upskill" : userIntent === "job" ? "/jobs" : "/home";
+        startRedirectCountdown(path);
+      }
+    } catch (error) {
+      console.error("Voice chat error:", error);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          role: "assistant",
+          content: "Sorry, I couldn't process your voice message. Please try again or type your message.",
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const sendVoiceMessageStreaming = async (audioBlob: Blob) => {
+    // Generate unique IDs upfront to prevent collisions
+    const userMsgId = `user-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const assistantMsgId = `assistant-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    try {
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'recording.webm');
+      formData.append('session_id', sessionId);
+      formData.append('language', selectedLanguage);
+      
+      const userId = localStorage.getItem("swavalambi_user_id");
+      if (userId) formData.append('user_id', userId);
+
+      const response = await fetch(`${API_BASE}/voice/chat-stream`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) throw new Error(`Voice API error: ${response.status}`);
+      if (!response.body) throw new Error("No response body");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      let userMessageAdded = false;
+      let assistantMessageAdded = false;
+      let fullText = "";
+      let buffer = ""; // Buffer for incomplete JSON chunks
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        // Add new data to buffer
+        buffer += decoder.decode(value, { stream: true });
+        
+        // Split by double newline (SSE message separator)
+        const sseMessages = buffer.split('\n\n');
+        
+        // Keep the last incomplete message in buffer
+        buffer = sseMessages.pop() || "";
+
+        for (const sseMessage of sseMessages) {
+          const lines = sseMessage.split("\n");
+          
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              const jsonStr = line.slice(6);
+              try {
+                const data = JSON.parse(jsonStr);
+
+                if (data.type === "transcription") {
+                  // Add user message once
+                  if (!userMessageAdded) {
+                    setMessages((prev) => [
+                      ...prev,
+                      {
+                        id: userMsgId,
+                        role: "user",
+                        content: data.text,
+                      },
+                    ]);
+                    userMessageAdded = true;
+                  }
+                  
+                  // Create assistant message with loading indicator once
+                  if (!assistantMessageAdded) {
+                    setMessages((prev) => [
+                      ...prev,
+                      {
+                        id: assistantMsgId,
+                        role: "assistant",
+                        content: "...", // Loading indicator (will be replaced by first chunk)
+                      },
+                    ]);
+                    assistantMessageAdded = true;
+                    
+                    // Turn off global loading since we have message-level loading
+                    setIsLoading(false);
+                  }
+                } else if (data.type === "text_chunk") {
+                  // STREAMING TEXT: Update message with each chunk as it arrives
+                  if (data.text) {
+                    fullText += data.text;
+                    
+                    setMessages((prev) =>
+                      prev.map((msg) =>
+                        msg.id === assistantMsgId
+                          ? { ...msg, content: fullText }
+                          : msg
+                      )
+                    );
+                  }
+                } else if (data.type === "audio_complete") {
+                  // Complete audio received - play it if voice is enabled
+                  if (voiceAutoPlay && data.audio_base64) {
+                    try {
+                      const audio = new Audio(
+                        `data:audio/${data.audio_format};base64,${data.audio_base64}`
+                      );
+                      audio.playbackRate = 1.0;
+                      
+                      audio.onended = () => {
+                        setPlayingMessageId(null);
+                        setCurrentAudio(null);
+                      };
+                      
+                      audio.onerror = (e) => {
+                        console.error("Audio playback failed:", e);
+                        setPlayingMessageId(null);
+                        setCurrentAudio(null);
+                      };
+                      
+                      await audio.play();
+                      setCurrentAudio(audio);
+                      setPlayingMessageId(assistantMsgId);
+                    } catch (error) {
+                      console.error("Audio playback failed:", error);
+                    }
+                  }
+                } else if (data.type === "text_complete") {
+                  // Fallback: Update message with complete text (in case we missed chunks)
+                  if (data.text && data.text !== fullText) {
+                    fullText = data.text;
+                    setMessages((prev) =>
+                      prev.map((msg) =>
+                        msg.id === assistantMsgId
+                          ? { ...msg, content: fullText }
+                          : msg
+                      )
+                    );
+                  }
+                } else if (data.type === "complete") {
+                  // Update with final metadata
+                  if (fullText) {
+                    setMessages((prev) =>
+                      prev.map((msg) =>
+                        msg.id === assistantMsgId
+                          ? {
+                              ...msg,
+                              content: fullText,
+                              isReadyForPhoto: data.is_ready_for_photo || false,
+                            }
+                          : msg
+                      )
+                    );
+                  }
+
+                  // Cache profile data
+                  cacheProfileData(data);
+
+                  if (data.is_complete) {
+                    const userIntent = data.intent_extracted || localStorage.getItem("swavalambi_intent");
+                    const path = userIntent === "upskill" ? "/upskill" : userIntent === "job" ? "/jobs" : "/home";
+                    startRedirectCountdown(path);
+                  }
+                }
+              } catch (e) {
+                console.error("Failed to parse SSE data:", e);
+              }
+            }
+          }
+        }
+      }
+      
+    } catch (error) {
+      console.error("Streaming voice chat error:", error);
+      
+      // Remove the loading "..." message if it exists and replace with error
+      setMessages((prev) => {
+        const filtered = prev.filter(msg => msg.id !== assistantMsgId);
+        return [
+          ...filtered,
+          {
+            id: (Date.now() + 1).toString(),
+            role: "assistant",
+            content: "Sorry, I couldn't process your voice message. Please try again.",
+          },
+        ];
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const playAudioChunk = (base64Audio: string, format: string) => {
+    // Play audio chunk immediately (non-blocking)
+    const audio = new Audio(`data:audio/${format};base64,${base64Audio}`);
+    
+    // CRITICAL FIX: Set playback rate to 1.0 (normal speed)
+    audio.playbackRate = 1.0;
+    
+    audio.play().catch(err => console.error("Audio playback failed:", err));
+  };
+
+  const playAudioChunkSequential = (base64Audio: string, format: string): Promise<void> => {
+    // Play audio chunk and wait for it to finish
+    return new Promise((resolve) => {
+      const audio = new Audio(`data:audio/${format};base64,${base64Audio}`);
+      audio.onended = () => resolve();
+      audio.onerror = () => resolve(); // Continue even if playback fails
+      audio.play().catch(err => {
+        console.error("Audio playback failed:", err);
+        resolve();
+      });
+    });
+  };
+
+  const sendVoiceMessageOld = async (audioBlob: Blob) => {
     setIsLoading(true);
     
     try {
@@ -1074,14 +1625,18 @@ export default function Assistant() {
 
     const audio = new Audio(`data:audio/${format};base64,${base64Audio}`);
     
+    // CRITICAL FIX: Set playback rate to 1.0 (normal speed)
+    // This prevents the audio from playing too fast
+    audio.playbackRate = 1.0;
+    
     // Set up event handlers
     audio.onended = () => {
       setPlayingMessageId(null);
       setCurrentAudio(null);
     };
     
-    audio.onerror = () => {
-      console.error("Audio playback failed");
+    audio.onerror = (e) => {
+      console.error("Audio playback failed:", e);
       setPlayingMessageId(null);
       setCurrentAudio(null);
     };
@@ -1201,7 +1756,9 @@ export default function Assistant() {
           </div>
         )}
 
-        {messages.map((msg) => (
+        {(() => {
+          const lastAssistantIdx = messages.map((m, i) => m.role === "assistant" ? i : -1).filter(i => i !== -1).at(-1) ?? -1;
+          return messages.map((msg, msgIdx) => (
           <div
             key={msg.id}
             className={`flex items-start gap-3 ${msg.role === "user" ? "justify-end" : ""}`}
@@ -1242,7 +1799,18 @@ export default function Assistant() {
                   {/* Render markdown for assistant, plain text for user */}
                   {msg.role === "assistant" ? (
                     <div className="space-y-0.5">
-                      {msg.content ? renderMarkdown(msg.content) : <p className="text-sm text-gray-500">No message content</p>}
+                      {msg.content === "..." ? (
+                        // Show animated loading dots without text
+                        <div className="flex items-center gap-1 py-1">
+                          <div className="w-2 h-2 bg-primary/60 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                          <div className="w-2 h-2 bg-primary/60 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                          <div className="w-2 h-2 bg-primary/60 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+                        </div>
+                      ) : msg.content ? (
+                        renderMarkdown(msg.content)
+                      ) : (
+                        <p className="text-sm text-gray-500">No message content</p>
+                      )}
                     </div>
                   ) : (
                     <p className="text-sm leading-relaxed whitespace-pre-wrap">
@@ -1250,8 +1818,8 @@ export default function Assistant() {
                     </p>
                   )}
 
-                  {/* Clickable option chips */}
-                  {msg.role === "assistant" && msg.content &&
+                  {/* Clickable option chips — only on the LATEST assistant message */}
+                  {msg.role === "assistant" && msg.content && msgIdx === lastAssistantIdx &&
                     (() => {
                       const opts = extractOptions(msg.content);
                       return opts.length > 0 ? (
@@ -1305,26 +1873,10 @@ export default function Assistant() {
               </div>
             )}
           </div>
-        ))}
+        ));
+        })()}
 
-        {isLoading && (
-          <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-full bg-primary flex items-center justify-center text-white shrink-0">
-              <Bot className="fill-current animate-pulse" />
-            </div>
-            <div className="bg-white p-4 rounded-xl rounded-tl-none shadow-sm border border-slate-100 flex items-center gap-1">
-              <div className="w-2 h-2 bg-slate-400 rounded-full animate-bounce"></div>
-              <div
-                className="w-2 h-2 bg-slate-400 rounded-full animate-bounce"
-                style={{ animationDelay: "0.2s" }}
-              ></div>
-              <div
-                className="w-2 h-2 bg-slate-400 rounded-full animate-bounce"
-                style={{ animationDelay: "0.4s" }}
-              ></div>
-            </div>
-          </div>
-        )}
+        {/* Loading dots are shown inline inside each assistant message (content === "...") */}
 
         <div ref={messagesEndRef} />
       </main>

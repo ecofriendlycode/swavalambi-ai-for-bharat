@@ -249,9 +249,12 @@ async def analyze_vision(
                     "s3Key": file_key,        # stored to regenerate presigned URL after expiry
                     "s3Bucket": bucket_name
                 })
+                
+                # Just use the feedback directly - no need for "I've analyzed your work!" prefix
+                # The feedback from vision agent is already in the user's language
                 chat_history.append({
                     "role": "assistant",
-                    "content": f"I've analyzed your work! {result['feedback']}"
+                    "content": result['feedback']
                 })
                 
                 update_chat_history(user_id, chat_history)

@@ -266,7 +266,7 @@ def clear_chat_history(user_id: str) -> None:
 def reset_assessment(user_id: str) -> None:
     """
     Completely resets a user's assessment data for retaking the assessment.
-    Clears: profile_assessment, chat_history, session_id
+    Clears: profile_assessment, chat_history, session_id, preferred_language
     Keeps: name, created_at, profile_picture, vision_upload_history, user_id
     
     Note: Old root-level fields (skill, skill_rating, theory_score, intent, gender, 
@@ -284,7 +284,7 @@ def reset_assessment(user_id: str) -> None:
             "intent = :default_intent, "
             "chat_history = :empty_list, "
             "updated_at = :now "
-            "REMOVE session_id, profile_assessment, gender, preferred_location"
+            "REMOVE session_id, profile_assessment, gender, preferred_location, preferred_language"
         ),
         ExpressionAttributeValues={
             ":empty_str": "",
