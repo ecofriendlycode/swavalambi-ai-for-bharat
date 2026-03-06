@@ -413,7 +413,7 @@ async def voice_chat_stream(
             yield f"data: {json.dumps({'type': 'transcription', 'text': user_text})}\n\n"
             
             # Get or create agent
-            is_new_session = session_id not in _agent_sessions
+            is_new_session = not has_agent_session(session_id)
             
             if is_new_session:
                 preferred_language = language
