@@ -81,6 +81,8 @@ Resources:
           - "http://localhost:3000"
           - "http://swavalambi-frontend-1772381208.s3-website-us-east-1.amazonaws.com"
           - "https://d21tmg809bunv0.cloudfront.net"
+          - "https://www.swavalambi.co.in"
+          - "https://swavalambi.co.in"
         AllowHeaders:
           - "*"
         AllowMethods:

@@ -105,6 +105,11 @@ pip install Pillow==10.0.0 -t . \
     --upgrade \
     --quiet
 
+# Install sarvamai SDK
+pip install sarvamai -t . \
+    --upgrade \
+    --quiet
+
 echo -e "${GREEN}✓ Binary packages installed${NC}"
 
 # Verify packages were installed
@@ -142,6 +147,8 @@ zip -r $PACKAGE_NAME \
   pgvector* \
   numpy/ \
   numpy* \
+  sarvamai/ \
+  sarvamai* \
   -x "*.pyc" -x "__pycache__/*" -x "tests/*" -x ".env" -x "*.md" > /dev/null
 
 PACKAGE_SIZE=$(du -h $PACKAGE_NAME | cut -f1)
@@ -174,18 +181,70 @@ aws lambda wait function-updated \
 echo -e "${GREEN}✓ Code update complete${NC}"
 
 echo -e "\n${YELLOW}Step 5: Updating Lambda configuration...${NC}"
+
+# Load non-sensitive env vars from .env.lambda (script runs inside backend/)
+# To add a new Lambda env var: add it to backend/.env.lambda and reference it below
+if [ -f ".env.lambda" ]; then
+    source .env.lambda
+else
+    echo -e "${RED}Error: backend/.env.lambda not found${NC}"
+    exit 1
+fi
+
+# Cognito IDs come from deploy-config.sh (environment-specific, not secrets)
+if [ -z "$COGNITO_USER_POOL_ID" ] || [ -z "$COGNITO_CLIENT_ID" ]; then
+    echo -e "${RED}Error: COGNITO_USER_POOL_ID and COGNITO_CLIENT_ID must be set in deploy-config.sh${NC}"
+    exit 1
+fi
+
 aws lambda update-function-configuration \
   --function-name $LAMBDA_FUNCTION \
   --environment "Variables={
-    DYNAMODB_TABLE=swavalambi_users,
-    ANTHROPIC_MODEL_ID=claude-sonnet-4-6,
-    AI_SECRETS_NAME=swavalambi/ai-credentials,
-    COGNITO_CLIENT_ID=2kfmnu9h7rq35jqn45q8jgfj5f,
-    COGNITO_USER_POOL_ID=us-east-1_bRKpUL77I,
-    USE_LOCAL_CREDENTIALS=false,
-    USE_ANTHROPIC=true,
-    VECTOR_STORE=pgvector,
-    EMBEDDING_PROVIDER=azure-openai
+    AI_SECRETS_NAME=${AI_SECRETS_NAME},
+    USE_LOCAL_CREDENTIALS=${USE_LOCAL_CREDENTIALS},
+    USE_ANTHROPIC=${USE_ANTHROPIC},
+    ANTHROPIC_MODEL_ID=${ANTHROPIC_MODEL_ID},
+    BEDROCK_MODEL_ID=${BEDROCK_MODEL_ID},
+    BEDROCK_EMBEDDING_MODEL=${BEDROCK_EMBEDDING_MODEL},
+    ENABLE_STREAMING=${ENABLE_STREAMING},
+    DYNAMODB_TABLE=${DYNAMODB_TABLE},
+    COGNITO_USER_POOL_ID=${COGNITO_USER_POOL_ID},
+    COGNITO_CLIENT_ID=${COGNITO_CLIENT_ID},
+    VECTOR_STORE=${VECTOR_STORE},
+    EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER},
+    EMBEDDING_CACHE_FILE=${EMBEDDING_CACHE_FILE},
+    VOICE_PROVIDER=${VOICE_PROVIDER},
+    VOICE_FALLBACK_ENABLED=${VOICE_FALLBACK_ENABLED},
+    VOICE_ENABLE_TRANSLATION=${VOICE_ENABLE_TRANSLATION},
+    VOICE_AUTO_PLAY=${VOICE_AUTO_PLAY},
+    VOICE_SPEED=${VOICE_SPEED},
+    SARVAM_STT_MODEL=${SARVAM_STT_MODEL},
+    SARVAM_TTS_MODEL=${SARVAM_TTS_MODEL},
+    SARVAM_TTS_SPEAKER=${SARVAM_TTS_SPEAKER},
+    SARVAM_TRANSLATE_MODEL=${SARVAM_TRANSLATE_MODEL},
+    SARVAM_TTS_SPEAKER_HI=${SARVAM_TTS_SPEAKER_HI},
+    SARVAM_TTS_SPEAKER_TE=${SARVAM_TTS_SPEAKER_TE},
+    SARVAM_TTS_SPEAKER_TA=${SARVAM_TTS_SPEAKER_TA},
+    SARVAM_TTS_SPEAKER_MR=${SARVAM_TTS_SPEAKER_MR},
+    SARVAM_TTS_SPEAKER_KN=${SARVAM_TTS_SPEAKER_KN},
+    SARVAM_TTS_SPEAKER_BN=${SARVAM_TTS_SPEAKER_BN},
+    SARVAM_TTS_SPEAKER_GU=${SARVAM_TTS_SPEAKER_GU},
+    SARVAM_TTS_SPEAKER_ML=${SARVAM_TTS_SPEAKER_ML},
+    SARVAM_TTS_SPEAKER_PA=${SARVAM_TTS_SPEAKER_PA},
+    SARVAM_TTS_SPEAKER_EN=${SARVAM_TTS_SPEAKER_EN},
+    AWS_S3_BUCKET=${AWS_S3_BUCKET},
+    AWS_TRANSCRIBE_LANGUAGE=${AWS_TRANSCRIBE_LANGUAGE},
+    AWS_POLLY_VOICE_ID=${AWS_POLLY_VOICE_ID},
+    AWS_TRANSLATE_SOURCE_LANG=${AWS_TRANSLATE_SOURCE_LANG},
+    AWS_TRANSLATE_TARGET_LANG=${AWS_TRANSLATE_TARGET_LANG},
+    AWS_S3_BUCKET_NAME=${AWS_S3_BUCKET_NAME},
+    VISION_MAX_FILE_SIZE_MB=${VISION_MAX_FILE_SIZE_MB},
+    VISION_MAX_UPLOADS_PER_HOUR=${VISION_MAX_UPLOADS_PER_HOUR},
+    VISION_MAX_UPLOADS_PER_10MIN=${VISION_MAX_UPLOADS_PER_10MIN},
+    POSTGRES_HOST=${POSTGRES_HOST},
+    POSTGRES_PORT=${POSTGRES_PORT},
+    POSTGRES_DATABASE=${POSTGRES_DATABASE},
+    POSTGRES_USER=${POSTGRES_USER}
   }" \
   --profile $AWS_PROFILE \
   --region $AWS_REGION \
@@ -200,7 +259,7 @@ API_ID=$(echo $API_GATEWAY_URL | sed -n 's|https://\([^.]*\)\.execute-api\..*|\1
 if [ -n "$API_ID" ]; then
     aws apigatewayv2 update-api \
       --api-id $API_ID \
-      --cors-configuration "AllowOrigins=http://localhost:5173,http://localhost:3000,http://swavalambi-frontend-1772381208.s3-website-us-east-1.amazonaws.com,https://d21tmg809bunv0.cloudfront.net,AllowMethods=GET,POST,PUT,DELETE,OPTIONS,PATCH,AllowHeaders=*,AllowCredentials=true,MaxAge=3600" \
+      --cors-configuration "AllowOrigins=http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000,http://swavalambi-frontend-1772381208.s3-website-us-east-1.amazonaws.com,https://d21tmg809bunv0.cloudfront.net,https://www.swavalambi.co.in,https://swavalambi.co.in,AllowMethods=GET,POST,PUT,DELETE,OPTIONS,PATCH,AllowHeaders=*,AllowCredentials=true,MaxAge=3600" \
       --profile $AWS_PROFILE \
       --region $AWS_REGION \
       --output json > /dev/null

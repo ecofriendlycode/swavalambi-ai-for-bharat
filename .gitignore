@@ -115,6 +115,23 @@ backend/psycopg2_binary*
 backend/pgvector/
 backend/numpy/
 backend/numpy*
+backend/sarvamai/
+backend/sarvamai*
+backend/annotated_types/
+backend/anyio/
+backend/bin/
+backend/certifi/
+backend/h11/
+backend/httpcore/
+backend/httpx/
+backend/idna/
+backend/pydantic/
+backend/pydantic_core/
+backend/typing_extensions.py
+backend/typing_inspection/
+backend/websockets/
+backend/package-lock.json
+.ssl-cert-arn
 nohup.out
 
 LANGUAGE_FLOW_VERIFICATION.md

@@ -96,7 +96,9 @@ app.add_middleware(
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
         "http://swavalambi-frontend-1772381208.s3-website-us-east-1.amazonaws.com",
-        "https://d21tmg809bunv0.cloudfront.net"
+        "https://d21tmg809bunv0.cloudfront.net",
+        "https://www.swavalambi.co.in",
+        "https://swavalambi.co.in"
     ],
     allow_credentials=True,
     allow_methods=["*"],
