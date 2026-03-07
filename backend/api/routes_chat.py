@@ -134,7 +134,7 @@ async def chat_profile(request: ChatRequest):
                 
                 # CRITICAL: Also seed the greeting into agent.messages so it is
                 # included in every subsequent DynamoDB save (not just the first one)
-                _agent_sessions[request.session_id].agent.messages = [
+                get_agent_session(request.session_id).agent.messages = [
                     {"role": "assistant", "content": [{"text": greeting}]}
                 ]
                 print(f"[INFO] Seeded greeting into agent.messages to prevent overwrite")
@@ -293,7 +293,7 @@ async def chat_profile_stream(request: ChatRequest):
         return await chat_profile(request)
     
     # Retrieve or create agent session (same as non-streaming)
-    is_new_session = request.session_id not in _agent_sessions
+    is_new_session = not has_agent_session(request.session_id)
     
     if is_new_session:
         # Get user's preferred language
@@ -307,11 +307,11 @@ async def chat_profile_stream(request: ChatRequest):
             except Exception as e:
                 print(f"[WARN] Failed to get preferred language: {e}")
         
-        _agent_sessions[request.session_id] = ProfilingAgent(
+        set_agent_session(request.session_id, ProfilingAgent(
             session_id=request.session_id,
             user_name=request.user_name or "",
             preferred_language=preferred_language
-        )
+        ))
         
         # Restore chat history if available
         chat_restored = False
@@ -327,7 +327,7 @@ async def chat_profile_stream(request: ChatRequest):
                             "role": msg["role"],
                             "content": [{"text": msg["content"]}]
                         })
-                    _agent_sessions[request.session_id].agent.messages = restored_messages
+                    get_agent_session(request.session_id).agent.messages = restored_messages
                     print(f"[INFO] Restored {len(chat_history)} messages for streaming session")
                     chat_restored = True
             except Exception as e:
@@ -369,14 +369,14 @@ async def chat_profile_stream(request: ChatRequest):
                 print(f"[INFO] Initialized streaming chat with {preferred_language} greeting")
                 
                 # CRITICAL: Seed greeting into agent.messages to prevent overwrite on first save
-                _agent_sessions[request.session_id].agent.messages = [
+                get_agent_session(request.session_id).agent.messages = [
                     {"role": "assistant", "content": [{"text": greeting}]}
                 ]
                 print(f"[INFO] Seeded greeting into streaming agent.messages")
             except Exception as e:
                 print(f"[WARN] Failed to initialize greeting: {e}")
     
-    agent = _agent_sessions[request.session_id]
+    agent = get_agent_session(request.session_id)
     
     # Generator function for SSE streaming
     async def generate_stream():
