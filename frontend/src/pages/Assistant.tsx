@@ -1132,6 +1132,16 @@ export default function Assistant() {
       },
     ]);
 
+    const assistantMessageId = (Date.now() + 1).toString();
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: assistantMessageId,
+        role: "assistant",
+        content: "...", // Show loading indicator initially
+      },
+    ]);
+
     setIsLoading(true);
     try {
       // Real call to FastAPI backend -> VisionAgent -> Bedrock Vision
@@ -1165,15 +1175,13 @@ export default function Assistant() {
         localStorage.setItem("swavalambi_intent", "job");
       }
 
-      const assistantMessageId = (Date.now() + 1).toString();
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: assistantMessageId,
-          role: "assistant",
-          content: result.feedback,  // Just use the feedback from backend (already in user's language)
-        },
-      ]);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === assistantMessageId
+            ? { ...msg, content: result.feedback }
+            : msg
+        )
+      );
 
       // Auto-play feedback if voice is enabled
       if (voiceAutoPlay) {
@@ -1190,15 +1198,16 @@ export default function Assistant() {
     } catch (e) {
 
       console.error(e);
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: (Date.now() + 1).toString(),
-          role: "assistant",
-          content:
-            "Sorry, I could not analyze the image. Please ensure the backend is running and try again.",
-        },
-      ]);
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === assistantMessageId
+            ? {
+                ...msg,
+                content: "Sorry, I could not analyze the image. Please ensure the backend is running and try again.",
+              }
+            : msg
+        )
+      );
     } finally {
       setIsLoading(false);
     }
