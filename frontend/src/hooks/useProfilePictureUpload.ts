@@ -1,8 +1,5 @@
 import { useState } from 'react';
-
-const API_BASE = import.meta.env.VITE_API_URL 
-  ? `${import.meta.env.VITE_API_URL}/api` 
-  : "http://localhost:8000/api";
+import { API_BASE } from '../config/api';
 
 interface UploadResult {
   success: boolean;

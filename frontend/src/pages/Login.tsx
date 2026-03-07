@@ -5,8 +5,7 @@ import heroBanner from "../assets/herobanner.png";
 import carpentry from "../assets/carpentry.png";
 import plumbing from "../assets/plumbing.png";
 import tailor from "../assets/tailor.png";
-
-const API_BASE = import.meta.env.VITE_API_URL ? `${import.meta.env.VITE_API_URL}/api` : "http://localhost:8000/api";
+import { API_BASE } from "../config/api";
 
 export default function Login() {
   const [identifier, setIdentifier] = useState(""); // email

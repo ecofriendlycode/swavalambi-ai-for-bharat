@@ -117,13 +117,8 @@ class VoiceService:
         self._init_sarvam()
     
     def _init_aws(self):
-        """Initialize AWS clients"""
-        session = boto3.Session(
-            aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-            aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-            aws_session_token=os.getenv("AWS_SESSION_TOKEN"),
-            region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
-        )
+        """Initialize AWS clients using default credential chain (Lambda IAM role, ECS task role, or local ~/.aws)"""
+        session = boto3.Session(region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
         self.transcribe_client = session.client("transcribe")
         self.polly_client = session.client("polly")
         self.translate_client = session.client("translate")

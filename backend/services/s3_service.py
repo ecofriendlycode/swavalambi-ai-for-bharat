@@ -11,13 +11,8 @@ logger = logging.getLogger(__name__)
 
 class S3Service:
     def __init__(self):
-        self.s3_client = boto3.client(
-            's3',
-            aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-            aws_session_token=os.getenv('AWS_SESSION_TOKEN'),
-            region_name=os.getenv('AWS_REGION', 'us-east-1')
-        )
+        # Use default boto3 credential chain - works for Lambda IAM role, ECS task role, and local dev
+        self.s3_client = boto3.client('s3', region_name=os.getenv('AWS_REGION', 'us-east-1'))
         self.bucket_name = os.getenv('AWS_S3_BUCKET_NAME', 'swavalambi-profile-pictures')
         
     def upload_profile_picture(self, user_id: str, file_content: bytes, content_type: str) -> str:

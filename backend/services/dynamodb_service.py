@@ -17,13 +17,9 @@ _TABLE_NAME = os.getenv("DYNAMODB_TABLE", "swavalambi_users")
 
 
 def _get_table():
-    session = boto3.Session(
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-        aws_session_token=os.getenv("AWS_SESSION_TOKEN"),
-        region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
-    )
-    dynamodb = session.resource("dynamodb")
+    # Use default boto3 credential chain - works for Lambda IAM role, ECS task role, and local dev
+    # For local dev, set AWS_ACCESS_KEY_ID/SECRET in .env or use aws configure
+    dynamodb = boto3.resource("dynamodb", region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
     return dynamodb.Table(_TABLE_NAME)
 
 

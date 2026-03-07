@@ -3,8 +3,7 @@ import { ArrowLeft, Briefcase, MapPin, Clock, IndianRupee } from "lucide-react";
 import { Link } from "react-router-dom";
 import BottomNav from "../components/BottomNav";
 import FloatingAssistant from "../components/FloatingAssistant";
-
-const API_BASE = import.meta.env.VITE_API_URL ? `${import.meta.env.VITE_API_URL}/api` : "http://localhost:8000/api";
+import { API_BASE } from "../config/api";
 
 interface Job {
   id: string;

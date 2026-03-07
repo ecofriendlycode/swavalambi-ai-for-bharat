@@ -266,7 +266,7 @@ API_ID=$(echo $API_GATEWAY_URL | sed -n 's|https://\([^.]*\)\.execute-api\..*|\1
 if [ -n "$API_ID" ]; then
     aws apigatewayv2 update-api \
       --api-id $API_ID \
-      --cors-configuration "AllowOrigins=http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000,http://swavalambi-frontend-1772381208.s3-website-us-east-1.amazonaws.com,https://d21tmg809bunv0.cloudfront.net,https://www.swavalambi.co.in,https://swavalambi.co.in,AllowMethods=GET,POST,PUT,DELETE,OPTIONS,PATCH,AllowHeaders=*,AllowCredentials=true,MaxAge=3600" \
+      --cors-configuration "AllowOrigins=http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000,${S3_WEBSITE_URL},${CLOUDFRONT_URL},https://www.swavalambi.co.in,https://swavalambi.co.in,AllowMethods=GET,POST,PUT,DELETE,OPTIONS,PATCH,AllowHeaders=*,AllowCredentials=true,MaxAge=3600" \
       --profile $AWS_PROFILE \
       --region $AWS_REGION \
       --output json > /dev/null

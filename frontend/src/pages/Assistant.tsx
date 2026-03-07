@@ -129,7 +129,7 @@ function extractOptions(text: string): string[] {
   return [];
 }
 
-const API_BASE = import.meta.env.VITE_API_URL ? `${import.meta.env.VITE_API_URL}/api` : "http://localhost:8000/api";
+import { API_BASE } from "../config/api";
 
 // Generate a stable session_id for this browser session
 // Fallback for browsers that don't support crypto.randomUUID (older browsers or HTTP context)

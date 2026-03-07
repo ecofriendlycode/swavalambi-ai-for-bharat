@@ -4,8 +4,7 @@ import { ArrowLeft, Settings, Star, FileText, Award, ShieldCheck, Bell, HelpCirc
 import BottomNav from '../components/BottomNav';
 import FloatingAssistant from '../components/FloatingAssistant';
 import { useProfilePictureUpload } from '../hooks/useProfilePictureUpload';
-
-const API_BASE = import.meta.env.VITE_API_URL ? `${import.meta.env.VITE_API_URL}/api` : "http://localhost:8000/api";
+import { API_BASE } from '../config/api';
 
 const LEVEL_LABELS: Record<number, string> = {
   0: 'Beginner',

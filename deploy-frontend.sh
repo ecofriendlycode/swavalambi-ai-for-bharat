@@ -88,9 +88,10 @@ echo -e "${GREEN}✓ Deployed to S3${NC}"
 
 echo -e "\n${YELLOW}Step 4: Invalidating CloudFront cache...${NC}"
 
-# Get CloudFront distribution ID
+# Get CloudFront distribution ID from domain
+CLOUDFRONT_DOMAIN=$(echo $CLOUDFRONT_URL | sed 's|https://||' | sed 's|http://||')
 CLOUDFRONT_DIST_ID=$(aws cloudfront list-distributions \
-  --query "DistributionList.Items[?contains(DomainName, 'd21tmg809bunv0')].Id" \
+  --query "DistributionList.Items[?DomainName=='${CLOUDFRONT_DOMAIN}'].Id | [0]" \
   --output text \
   --profile $AWS_PROFILE 2>/dev/null)
 
