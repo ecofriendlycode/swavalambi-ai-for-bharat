@@ -711,9 +711,9 @@ export default function Assistant() {
   // Start redirect countdown
   const startRedirectCountdown = (path: string) => {
     setRedirectPath(path);
-    setRedirectCountdown(5);
+    setRedirectCountdown(10);
     
-    // Give user 5 seconds to read the final message before showing modal
+    // Give user 10 seconds to read the final message before showing modal
     setTimeout(() => {
       setShowRedirectModal(true);
 
@@ -723,7 +723,7 @@ export default function Assistant() {
       }
 
       // Start countdown
-      let count = 5;
+      let count = 10;
       redirectTimerRef.current = setInterval(() => {
         count--;
         setRedirectCountdown(count);
@@ -735,7 +735,7 @@ export default function Assistant() {
           navigate(path);
         }
       }, 1000);
-    }, 5000); // 5 second delay before showing modal
+    }, 10000); // 10 second delay before showing modal
   };
 
   // Cancel redirect
